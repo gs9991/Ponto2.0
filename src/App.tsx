@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react'
 import { initializeApp } from 'firebase/app'
 import { getFirestore, collection, doc, onSnapshot, setDoc, deleteDoc } from 'firebase/firestore'
-// @ts-ignore
-db._settings = { ...db._settings, experimentalForceLongPolling: true }
+const db = getFirestore(firebaseApp)
 // ─── Firebase ────────────────────────────────────────────────────────────────
 const firebaseConfig = {
   apiKey: "AIzaSyAMkmq0EdQt8y9tMA9UFH5feI2YyccHaa8",
@@ -14,8 +13,6 @@ const firebaseConfig = {
 }
 const firebaseApp = initializeApp(firebaseConfig)
 const db = getFirestore(firebaseApp)
-// @ts-ignore
-db._settings = { ...db._settings, experimentalForceLongPolling: true }
 
 const ADMIN_CRED = { username: 'admin', password: 'admin123' }
 
