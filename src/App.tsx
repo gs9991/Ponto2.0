@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { initializeApp } from 'firebase/app'
-import { getFirestore, collection, doc, onSnapshot, setDoc, deleteDoc, connectFirestoreEmulator } from 'firebase/firestore'
+import { getFirestore, collection, doc, onSnapshot, setDoc, deleteDoc } from 'firebase/firestore'
 // ─── Firebase ────────────────────────────────────────────────────────────────
 const firebaseConfig = {
   apiKey: "AIzaSyAMkmq0EdQt8y9tMA9UFH5feI2YyccHaa8",
