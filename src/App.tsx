@@ -1,4 +1,18 @@
 import { useState, useEffect } from 'react'
+import { initializeApp } from 'firebase/app'
+import { getFirestore, collection, doc, onSnapshot, setDoc, deleteDoc, updateDoc } from 'firebase/firestore'
+
+// ─── Firebase ────────────────────────────────────────────────────────────────
+const firebaseConfig = {
+  apiKey: "AIzaSyAMkmq0EdQt8y9tMA9UFH5feI2YyccHaa8",
+  authDomain: "pontoapp-5cbc4.firebaseapp.com",
+  projectId: "pontoapp-5cbc4",
+  storageBucket: "pontoapp-5cbc4.firebasestorage.app",
+  messagingSenderId: "532087110856",
+  appId: "1:532087110856:web:15bb509ff5af13dd3879fd"
+}
+const firebaseApp = initializeApp(firebaseConfig)
+const db = getFirestore(firebaseApp)
 
 const ADMIN_CRED = { username: 'admin', password: 'admin123' }
 
@@ -103,11 +117,9 @@ const TODAY = () => new Date().toISOString().split('T')[0]
 export default function PontoApp() {
   const [now, setNow] = useState(new Date())
   const [loggedIn, setLoggedIn] = useState<User | null>(null)
-  const [employees, setEmployees] = useState<Employee[]>([
-    { id: 1, name: 'Ana Silva', role: 'Desenvolvedora', username: 'ana', password: '1234', avatar: 'AS', payType: 'hour', payValue: 15, hoursPerDay: 8, discounts: [] },
-    { id: 2, name: 'Carlos Mendes', role: 'Designer', username: 'carlos', password: '1234', avatar: 'CM', payType: 'day', payValue: 120, hoursPerDay: 8, discounts: [] },
-  ])
+  const [employees, setEmployees] = useState<Employee[]>([])
   const [records, setRecords] = useState<Record<number, EmpState>>({})
+  const [loading, setLoading] = useState(true)
 
   // Nav
   const [view, setView] = useState('clock')
@@ -142,6 +154,41 @@ export default function PontoApp() {
   const [punchChecking, setPunchChecking] = useState(false)
 
   useEffect(() => { const t = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(t) }, [])
+
+  // ── Firebase sync ─────────────────────────────────────────────────────────
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'employees'), (snap) => {
+      const emps: Employee[] = snap.docs.map(d => ({ ...(d.data() as Employee) }))
+      setEmployees(emps)
+      setLoading(false)
+    })
+    return () => unsub()
+  }, [])
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'records'), (snap) => {
+      const recs: Record<number, EmpState> = {}
+      snap.docs.forEach(d => {
+        const data = d.data()
+        recs[Number(d.id)] = {
+          ...data,
+          log: (data.log || []).map((e: { type: string; time: string }) => ({ type: e.type, time: new Date(e.time) })),
+          workStart: data.workStart ? new Date(data.workStart) : null,
+          breakStart: data.breakStart ? new Date(data.breakStart) : null,
+        } as EmpState
+      })
+      setRecords(recs)
+    })
+    return () => unsub()
+  }, [])
+
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, 'config', 'geofence'), (snap) => {
+      if (snap.exists()) setGeofence(snap.data() as { lat: number; lng: number; radius: number; address: string })
+      else setGeofence(null)
+    })
+    return () => unsub()
+  }, [])
 
   // ── Auth ──────────────────────────────────────────────────────────────────
   const handleLogin = () => {
@@ -185,7 +232,7 @@ export default function PontoApp() {
     if (!radius || radius < 10 || radius > 5000) { setGeoError('Raio deve ser entre 10 e 5000 metros.'); setGeoLoading(false); return }
     const coords = await geocodeAddress(geoForm.address)
     if (!coords) { setGeoError('Endereço não encontrado. Tente ser mais específico.'); setGeoLoading(false); return }
-    setGeofence({ ...coords, radius, address: geoForm.address })
+    await setDoc(doc(db, 'config', 'geofence'), { ...coords, radius, address: geoForm.address })
     setGeoSuccess(`Cerca ativa! Raio de ${radius}m em torno do endereço.`)
     setGeoLoading(false)
     setTimeout(() => setGeoSuccess(''), 4000)
@@ -195,7 +242,7 @@ export default function PontoApp() {
     if (!loggedIn || loggedIn.role !== 'employee') return
     setPunchBlocked(''); setPunchChecking(true)
 
-    const doRegister = () => {
+    const doRegister = async () => {
       const id = loggedIn.id
       const state = getState(id)
       const ts = new Date()
@@ -214,7 +261,14 @@ export default function PontoApp() {
         s.totalBreak = (state.totalBreak || 0) + (state.breakStart ? ts.getTime() - state.breakStart.getTime() : 0)
         s.status = STATUS.IN; s.breakStart = null; s.workStart = ts
       }
-      setRecords(prev => ({ ...prev, [id]: s }))
+      // Serialize dates for Firestore
+      const serialized = {
+        ...s,
+        log: s.log.map(e => ({ type: e.type, time: e.time.toISOString() })),
+        workStart: s.workStart ? s.workStart.toISOString() : null,
+        breakStart: s.breakStart ? s.breakStart.toISOString() : null,
+      }
+      await setDoc(doc(db, 'records', String(id)), serialized)
       setPunchChecking(false)
     }
 
@@ -275,15 +329,18 @@ export default function PontoApp() {
     return e
   }
 
-  const saveEmployee = () => {
+  const saveEmployee = async () => {
     const e = validateForm(); if (Object.keys(e).length) { setFormErrors(e); return }
     const av = form.name.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase()
     const data = { name: form.name, role: form.role, username: form.username, avatar: av, payType: form.payType as 'day' | 'hour', payValue: Number(form.payValue), hoursPerDay: Number(form.hoursPerDay) || 8, ...(form.password ? { password: form.password } : {}) }
     if (editingEmp) {
-      setEmployees(prev => prev.map(emp => emp.id === editingEmp.id ? { ...emp, ...data } : emp))
+      const updated = { ...editingEmp, ...data }
+      await setDoc(doc(db, 'employees', String(editingEmp.id)), updated)
       setSuccessMsg('Funcionário atualizado!')
     } else {
-      setEmployees(prev => [...prev, { id: Date.now(), password: form.password, discounts: [], ...data }])
+      const id = Date.now()
+      const newEmp = { id, password: form.password, discounts: [], ...data }
+      await setDoc(doc(db, 'employees', String(id)), newEmp)
       setSuccessMsg('Funcionário cadastrado!')
     }
     setTimeout(() => setSuccessMsg(''), 3000)
@@ -291,9 +348,9 @@ export default function PontoApp() {
     setFormErrors({}); setEditingEmp(null); setAdminView('list')
   }
 
-  const deleteEmployee = (id: number) => {
-    setEmployees(prev => prev.filter(e => e.id !== id))
-    setRecords(prev => { const n = { ...prev }; delete n[id]; return n })
+  const deleteEmployee = async (id: number) => {
+    await deleteDoc(doc(db, 'employees', String(id)))
+    await deleteDoc(doc(db, 'records', String(id)))
   }
 
   const startEdit = (emp: Employee) => {
@@ -303,20 +360,26 @@ export default function PontoApp() {
   }
 
   // ── Discounts ─────────────────────────────────────────────────────────────
-  const addDiscount = (empId: number) => {
+  const addDiscount = async (empId: number) => {
     setDiscountError('')
     if (!discountForm.value || isNaN(Number(discountForm.value)) || Number(discountForm.value) <= 0) {
       setDiscountError('Informe um valor válido'); return
     }
     if (!discountForm.reason.trim()) { setDiscountError('Informe o motivo do desconto'); return }
     const newDiscount: Discount = { id: Date.now(), value: Number(discountForm.value), reason: discountForm.reason.trim(), date: formatDateShort(new Date()) }
-    setEmployees(prev => prev.map(emp => emp.id === empId ? { ...emp, discounts: [...emp.discounts, newDiscount] } : emp))
+    const emp = employees.find(e => e.id === empId)
+    if (!emp) return
+    const updated = { ...emp, discounts: [...emp.discounts, newDiscount] }
+    await setDoc(doc(db, 'employees', String(empId)), updated)
     setDiscountForm({ value: '', reason: '' })
     setDiscountTarget(null)
   }
 
-  const removeDiscount = (empId: number, discountId: number) => {
-    setEmployees(prev => prev.map(emp => emp.id === empId ? { ...emp, discounts: emp.discounts.filter(d => d.id !== discountId) } : emp))
+  const removeDiscount = async (empId: number, discountId: number) => {
+    const emp = employees.find(e => e.id === empId)
+    if (!emp) return
+    const updated = { ...emp, discounts: emp.discounts.filter(d => d.id !== discountId) }
+    await setDoc(doc(db, 'employees', String(empId)), updated)
   }
 
   // ── Generate PDF Extract ──────────────────────────────────────────────────
@@ -380,6 +443,15 @@ export default function PontoApp() {
   const empPayment = myEmpData && empState ? calcPayment(myEmpData, empState, liveWork) : null
 
   // ─────────────────────────────────────────────────────────────────────────
+  if (loading) return (
+    <div style={{ minHeight: '100vh', background: '#0f172a', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: "'Courier New', monospace" }}>
+      <div style={{ textAlign: 'center' }}>
+        <div style={{ fontSize: 40, marginBottom: 16 }}>⏱</div>
+        <div style={{ fontSize: 14, color: '#475569', letterSpacing: 2 }}>CARREGANDO...</div>
+      </div>
+    </div>
+  )
+
   return (
     <div style={{ minHeight: '100vh', background: '#0f172a', display: 'flex', justifyContent: 'center', fontFamily: "'Courier New', monospace" }}>
       <div style={{ width: '100%', maxWidth: 420, minHeight: '100vh', background: '#0f172a', display: 'flex', flexDirection: 'column' }}>
@@ -958,7 +1030,7 @@ export default function PontoApp() {
                         <div style={{ fontSize: 13, fontWeight: 700, color: '#f1f5f9', marginBottom: 4 }}>{geofence.address}</div>
                         <div style={{ fontSize: 11, color: '#64748b' }}>Raio permitido: <span style={{ color: '#06b6d4', fontWeight: 700 }}>{geofence.radius}m</span></div>
                         <div style={{ fontSize: 10, color: '#475569', marginTop: 4 }}>Coords: {geofence.lat.toFixed(5)}, {geofence.lng.toFixed(5)}</div>
-                        <button onClick={() => { setGeofence(null); setGeoForm({ address: '', radius: '100' }) }}
+                        <button onClick={async () => { await deleteDoc(doc(db, 'config', 'geofence')); setGeoForm({ address: '', radius: '100' }) }}
                           style={{ marginTop: 12, padding: '8px 14px', borderRadius: 8, border: '1px solid #ef444440', background: '#ef444415', color: '#ef4444', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
                           🗑 Remover Cerca
                         </button>
