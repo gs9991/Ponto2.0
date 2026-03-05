@@ -12,7 +12,6 @@ const firebaseConfig = {
 }
 const firebaseApp = initializeApp(firebaseConfig)
 const db = initializeFirestore(firebaseApp, { experimentalForceLongPolling: true })
-db._settings.experimentalForceLongPolling = true
 
 const ADMIN_CRED = { username: 'admin', password: 'admin123' }
 
