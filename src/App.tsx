@@ -71,6 +71,7 @@ interface EmpState {
   status: string; log: LogEntry[]; workStart: Date | null; breakStart: Date | null
   totalWork: number; totalBreak: number; days: string[]
   dailyWork: Record<string, number> // date string -> ms worked that day
+  dailyOff: Record<string, 'paid' | 'unpaid'> // date string -> folga remunerada ou nao
 }
 
 interface User {
@@ -203,6 +204,7 @@ export default function PontoApp() {
           workStart: data.workStart ? new Date(data.workStart) : null,
           breakStart: data.breakStart ? new Date(data.breakStart) : null,
           dailyWork: data.dailyWork || {},
+          dailyOff: data.dailyOff || {},
         } as EmpState
       })
       setRecords(recs)
@@ -233,7 +235,7 @@ export default function PontoApp() {
 
   // ── Punch ─────────────────────────────────────────────────────────────────
   const getState = (id: number): EmpState =>
-    records[id] || { status: STATUS.OUT, log: [], workStart: null, breakStart: null, totalWork: 0, totalBreak: 0, days: [], dailyWork: {} }
+    records[id] || { status: STATUS.OUT, log: [], workStart: null, breakStart: null, totalWork: 0, totalBreak: 0, days: [], dailyWork: {}, dailyOff: {} }
 
   // ── Geofence helpers ──────────────────────────────────────────────────────
   const geocodeAddress = async (address: string): Promise<{ lat: number; lng: number } | null> => {
@@ -342,20 +344,23 @@ export default function PontoApp() {
     const totalBreakMs = (state.totalBreak || 0) + (state.breakStart ? now.getTime() - state.breakStart.getTime() : 0)
     const breakHours = totalBreakMs / 3600000
     const daysWorked = state.days.length + (state.status !== STATUS.OUT ? 1 : 0)
+    const paidOffDays = Object.values(state.dailyOff || {}).filter(v => v === 'paid').length
+    const totalPaidDays = daysWorked + paidOffDays
 
     let grossValue = 0, autoDeductions = 0
     if (emp.payType === 'hour') {
-      grossValue = totalHours * emp.payValue
+      const paidOffMs = paidOffDays * emp.hoursPerDay * 3600000
+      grossValue = (totalMs + paidOffMs) / 3600000 * emp.payValue
       autoDeductions = Math.max(0, breakHours - daysWorked) * emp.payValue
     } else {
-      grossValue = daysWorked * emp.payValue
+      grossValue = totalPaidDays * emp.payValue
     }
 
     const manualDiscountTotal = emp.discounts.reduce((s, d) => s + d.value, 0)
     const totalDeductions = autoDeductions + manualDiscountTotal
     const net = Math.max(0, grossValue - totalDeductions)
 
-    return { totalHours, totalMs, daysWorked, grossValue, autoDeductions, manualDiscountTotal, totalDeductions, net, breakHours, breakMs: totalBreakMs }
+    return { totalHours, totalMs, daysWorked, paidOffDays, totalPaidDays, grossValue, autoDeductions, manualDiscountTotal, totalDeductions, net, breakHours, breakMs: totalBreakMs }
   }
 
   // ── Employee CRUD ─────────────────────────────────────────────────────────
@@ -488,6 +493,25 @@ export default function PontoApp() {
     await setDoc(doc(db, 'records', String(empId)), updated)
     setEditingDay(null)
     setEditTimes({ entrada: '', almoco_ini: '', almoco_fim: '', saida: '' })
+  }
+
+  // ── Mark day off ─────────────────────────────────────────────────────────
+  const markDayOff = async (empId: number, date: string, type: 'paid' | 'unpaid' | null) => {
+    const state = getState(empId)
+    const newDailyOff = { ...(state.dailyOff || {}) }
+    if (type === null) {
+      delete newDailyOff[date]
+    } else {
+      newDailyOff[date] = type
+    }
+    const updated = {
+      ...state,
+      dailyOff: newDailyOff,
+      log: state.log.map(e => ({ type: e.type, time: e.time.toISOString() })),
+      workStart: state.workStart ? state.workStart.toISOString() : null,
+      breakStart: state.breakStart ? state.breakStart.toISOString() : null,
+    }
+    await setDoc(doc(db, 'records', String(empId)), updated)
   }
 
   // ── Generate Extract ──────────────────────────────────────────────────────
@@ -1166,16 +1190,32 @@ export default function PontoApp() {
                             const isToday = date === todayStr
                             const isEditing = editingDay?.empId === emp.id && editingDay?.date === date
                             const isWeekend = new Date(date + 'T12:00:00').getDay() === 0 || new Date(date + 'T12:00:00').getDay() === 6
+                            const offType = (st.dailyOff || {})[date]
+                            const isPaidOff = offType === 'paid'
+                            const isUnpaidOff = offType === 'unpaid'
+
+                            const rowBg = isPaidOff ? '#7c3aed15' : isUnpaidOff ? '#33415515' : isToday ? '#6366f115' : '#0f172a'
+                            const rowBorder = isPaidOff ? '1px solid #7c3aed40' : isUnpaidOff ? '1px solid #47556940' : isToday ? '1px solid #6366f140' : '1px solid transparent'
 
                             return (
                               <div key={date}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', background: isToday ? '#6366f115' : '#0f172a', borderRadius: 8, border: isToday ? '1px solid #6366f140' : '1px solid transparent' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', background: rowBg, borderRadius: 8, border: rowBorder }}>
                                   <div style={{ width: 28, textAlign: 'center' }}>
-                                    <div style={{ fontSize: 13, fontWeight: 700, color: isToday ? '#a5b4fc' : isWeekend ? '#475569' : '#94a3b8' }}>{d}</div>
+                                    <div style={{ fontSize: 13, fontWeight: 700, color: isToday ? '#a5b4fc' : isPaidOff ? '#c4b5fd' : isUnpaidOff ? '#64748b' : isWeekend ? '#475569' : '#94a3b8' }}>{d}</div>
                                     <div style={{ fontSize: 9, color: '#475569', textTransform: 'uppercase' }}>{weekday}</div>
                                   </div>
                                   <div style={{ flex: 1 }}>
-                                    {ms > 0 ? (
+                                    {isPaidOff ? (
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                        <span style={{ fontSize: 14 }}>🌴</span>
+                                        <span style={{ fontSize: 11, fontWeight: 700, color: '#c4b5fd' }}>Folga Remunerada</span>
+                                      </div>
+                                    ) : isUnpaidOff ? (
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                        <span style={{ fontSize: 14 }}>⚫</span>
+                                        <span style={{ fontSize: 11, fontWeight: 700, color: '#64748b' }}>Folga Não Remunerada</span>
+                                      </div>
+                                    ) : ms > 0 ? (
                                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                                         <div style={{ flex: 1, height: 6, background: '#1e293b', borderRadius: 3, overflow: 'hidden' }}>
                                           <div style={{ height: '100%', background: '#22c55e', borderRadius: 3, width: `${Math.min(100, (ms / (emp.hoursPerDay * 3600000)) * 100)}%` }} />
@@ -1189,7 +1229,6 @@ export default function PontoApp() {
                                   <button onClick={() => {
                                     if (isEditing) { setEditingDay(null); return }
                                     setEditingDay({ empId: emp.id, date })
-                                    // Pre-fill from existing logs for this day
                                     const dayLogs = st.log.filter(e => new Date(e.time).toISOString().split('T')[0] === date)
                                     const getTime = (type: string) => {
                                       const entry = dayLogs.find(e => e.type === type)
@@ -1208,10 +1247,30 @@ export default function PontoApp() {
                                   </button>
                                 </div>
 
-                                {/* Edit form */}
+                                {/* Edit / Folga panel */}
                                 {isEditing && (
                                   <div style={{ background: '#0f172a', borderRadius: 8, padding: 12, margin: '4px 0', border: '1px solid #6366f140' }}>
                                     <div style={{ fontSize: 10, color: '#6366f1', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 10 }}>✏️ Editar dia {d}/{String(m).padStart(2,'0')}</div>
+
+                                    {/* Folga buttons */}
+                                    <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                                      <button onClick={() => markDayOff(emp.id, date, isPaidOff ? null : 'paid')}
+                                        style={{ flex: 1, padding: '8px 0', borderRadius: 8, border: `1px solid ${isPaidOff ? '#7c3aed' : '#7c3aed40'}`, background: isPaidOff ? '#7c3aed30' : 'transparent', color: isPaidOff ? '#c4b5fd' : '#7c3aed', fontSize: 10, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+                                        🌴 {isPaidOff ? 'Remover Folga' : 'Folga Remunerada'}
+                                      </button>
+                                      <button onClick={() => markDayOff(emp.id, date, isUnpaidOff ? null : 'unpaid')}
+                                        style={{ flex: 1, padding: '8px 0', borderRadius: 8, border: `1px solid ${isUnpaidOff ? '#475569' : '#33415540'}`, background: isUnpaidOff ? '#33415530' : 'transparent', color: isUnpaidOff ? '#94a3b8' : '#475569', fontSize: 10, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+                                        ⚫ {isUnpaidOff ? 'Remover Folga' : 'Folga Não Rem.'}
+                                      </button>
+                                    </div>
+
+                                    {/* Separator */}
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                                      <div style={{ flex: 1, height: 1, background: '#1e293b' }} />
+                                      <span style={{ fontSize: 9, color: '#334155', letterSpacing: 2 }}>OU EDITAR HORÁRIOS</span>
+                                      <div style={{ flex: 1, height: 1, background: '#1e293b' }} />
+                                    </div>
+
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
                                       {[
                                         { key: 'entrada', label: '▶ Entrada', color: '#22c55e' },
@@ -1247,8 +1306,8 @@ export default function PontoApp() {
                                       )
                                     })()}
                                     <div style={{ display: 'flex', gap: 8 }}>
-                                      <Btn full onClick={saveEditedHours} color="#22c55e">💾 Salvar</Btn>
-                                      <Btn full outline color="#64748b" onClick={() => setEditingDay(null)}>Cancelar</Btn>
+                                      <Btn full onClick={saveEditedHours} color="#22c55e">💾 Salvar Horários</Btn>
+                                      <Btn full outline color="#64748b" onClick={() => setEditingDay(null)}>Fechar</Btn>
                                     </div>
                                   </div>
                                 )}
@@ -1257,9 +1316,19 @@ export default function PontoApp() {
                           })}
                         </div>
 
-                        <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid #334155', display: 'flex', justifyContent: 'space-between' }}>
-                          <span style={{ fontSize: 12, color: '#64748b' }}>Total do mês</span>
-                          <span style={{ fontSize: 14, fontWeight: 800, color: '#22c55e' }}>{msToHHMM(monthTotal)}</span>
+                        <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid #334155' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                            <span style={{ fontSize: 12, color: '#64748b' }}>Total trabalhado</span>
+                            <span style={{ fontSize: 14, fontWeight: 800, color: '#22c55e' }}>{msToHHMM(monthTotal)}</span>
+                          </div>
+                          {(() => {
+                            const paidOff = days.filter(d => (st.dailyOff || {})[d] === 'paid').length
+                            const unpaidOff = days.filter(d => (st.dailyOff || {})[d] === 'unpaid').length
+                            return (<>
+                              {paidOff > 0 && <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}><span style={{ fontSize: 11, color: '#c4b5fd' }}>🌴 Folgas remuneradas</span><span style={{ fontSize: 11, fontWeight: 700, color: '#c4b5fd' }}>{paidOff} dia(s)</span></div>}
+                              {unpaidOff > 0 && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ fontSize: 11, color: '#64748b' }}>⚫ Folgas não remuneradas</span><span style={{ fontSize: 11, fontWeight: 700, color: '#64748b' }}>{unpaidOff} dia(s)</span></div>}
+                            </>)
+                          })()}
                         </div>
                       </div>
                     )
