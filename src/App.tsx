@@ -169,8 +169,7 @@ export default function PontoApp() {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
   })
   const [editingDay, setEditingDay] = useState<{ empId: number; date: string } | null>(null)
-  const [editHours, setEditHours] = useState('')
-  const [editMinutes, setEditMinutes] = useState('')
+  const [editTimes, setEditTimes] = useState({ entrada: '', almoco_ini: '', almoco_fim: '', saida: '' })
 
   // Geofence
   const [geofence, setGeofence] = useState<{ lat: number; lng: number; radius: number; address: string } | null>(null)
@@ -425,34 +424,70 @@ export default function PontoApp() {
   }
 
   // ── Edit daily hours (admin) ───────────────────────────────────────────────
+  const timeToMs = (timeStr: string, date: string): number | null => {
+    if (!timeStr) return null
+    const [h, m] = timeStr.split(':').map(Number)
+    if (isNaN(h) || isNaN(m)) return null
+    return new Date(`${date}T${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:00`).getTime()
+  }
+
   const saveEditedHours = async () => {
     if (!editingDay) return
     const { empId, date } = editingDay
-    const h = parseInt(editHours) || 0
-    const m = parseInt(editMinutes) || 0
-    const ms = (h * 60 + m) * 60000
+    const { entrada, almoco_ini, almoco_fim, saida } = editTimes
+
+    const tsEntrada = timeToMs(entrada, date)
+    const tsSaida = timeToMs(saida, date)
+    const tsAlmocoIni = timeToMs(almoco_ini, date)
+    const tsAlmocoFim = timeToMs(almoco_fim, date)
+
+    if (!tsEntrada || !tsSaida || tsSaida <= tsEntrada) {
+      alert('Preencha ao menos Entrada e Saída com horários válidos.')
+      return
+    }
+
+    // Calculate worked ms: (saida - entrada) - break time
+    let breakMs = 0
+    if (tsAlmocoIni && tsAlmocoFim && tsAlmocoFim > tsAlmocoIni) {
+      breakMs = tsAlmocoFim - tsAlmocoIni
+    }
+    const workedMs = Math.max(0, tsSaida - tsEntrada - breakMs)
+
+    // Build new log entries for this day (replace existing entries for this date)
     const state = getState(empId)
+    const otherDayLogs = state.log.filter(e => {
+      const d = new Date(e.time).toISOString().split('T')[0]
+      return d !== date
+    })
+    const newLogs: LogEntry[] = [
+      { type: 'entrada', time: new Date(tsEntrada) },
+      ...(tsAlmocoIni ? [{ type: 'inicio_pausa', time: new Date(tsAlmocoIni) }] : []),
+      ...(tsAlmocoFim ? [{ type: 'fim_pausa', time: new Date(tsAlmocoFim) }] : []),
+      { type: 'saida', time: new Date(tsSaida) },
+    ]
+    const allLogs = [...otherDayLogs, ...newLogs].sort((a, b) => a.time.getTime() - b.time.getTime())
+
     const oldMs = (state.dailyWork || {})[date] || 0
-    const diff = ms - oldMs
-    const newDailyWork = { ...(state.dailyWork || {}), [date]: ms }
+    const diff = workedMs - oldMs
+    const newDailyWork = { ...(state.dailyWork || {}), [date]: workedMs }
     const newTotalWork = Math.max(0, (state.totalWork || 0) + diff)
-    // Update days list
+
     let newDays = [...(state.days || [])]
-    if (ms > 0 && !newDays.includes(date)) newDays = [...newDays, date]
-    if (ms === 0) newDays = newDays.filter(d => d !== date)
+    if (workedMs > 0 && !newDays.includes(date)) newDays = [...newDays, date]
+    if (workedMs === 0) newDays = newDays.filter(d => d !== date)
+
     const updated = {
       ...state,
       dailyWork: newDailyWork,
       totalWork: newTotalWork,
       days: newDays,
-      log: state.log.map(e => ({ type: e.type, time: e.time.toISOString() })),
+      log: allLogs.map(e => ({ type: e.type, time: e.time.toISOString() })),
       workStart: state.workStart ? state.workStart.toISOString() : null,
       breakStart: state.breakStart ? state.breakStart.toISOString() : null,
     }
     await setDoc(doc(db, 'records', String(empId)), updated)
     setEditingDay(null)
-    setEditHours('')
-    setEditMinutes('')
+    setEditTimes({ entrada: '', almoco_ini: '', almoco_fim: '', saida: '' })
   }
 
   // ── Generate Extract ──────────────────────────────────────────────────────
@@ -1154,10 +1189,20 @@ export default function PontoApp() {
                                   <button onClick={() => {
                                     if (isEditing) { setEditingDay(null); return }
                                     setEditingDay({ empId: emp.id, date })
-                                    const h = Math.floor(ms / 3600000)
-                                    const min = Math.floor((ms % 3600000) / 60000)
-                                    setEditHours(String(h))
-                                    setEditMinutes(String(min))
+                                    // Pre-fill from existing logs for this day
+                                    const dayLogs = st.log.filter(e => new Date(e.time).toISOString().split('T')[0] === date)
+                                    const getTime = (type: string) => {
+                                      const entry = dayLogs.find(e => e.type === type)
+                                      if (!entry) return ''
+                                      const t = new Date(entry.time)
+                                      return `${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}`
+                                    }
+                                    setEditTimes({
+                                      entrada: getTime('entrada'),
+                                      almoco_ini: getTime('inicio_pausa'),
+                                      almoco_fim: getTime('fim_pausa'),
+                                      saida: getTime('saida'),
+                                    })
                                   }} style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 6, padding: '4px 8px', cursor: 'pointer', color: '#64748b', fontSize: 10, fontFamily: 'inherit' }}>
                                     {isEditing ? '✕' : '✏️'}
                                   </button>
@@ -1165,21 +1210,42 @@ export default function PontoApp() {
 
                                 {/* Edit form */}
                                 {isEditing && (
-                                  <div style={{ background: '#0f172a', borderRadius: 8, padding: 12, margin: '4px 0 4px 0', border: '1px solid #6366f140' }}>
-                                    <div style={{ fontSize: 10, color: '#6366f1', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 10 }}>✏️ Editar horas do dia {d}/{String(m).padStart(2, '0')}</div>
-                                    <div style={{ display: 'flex', gap: 10, marginBottom: 10 }}>
-                                      <div style={{ flex: 1 }}>
-                                        <div style={{ fontSize: 10, color: '#475569', marginBottom: 4 }}>Horas</div>
-                                        <input type="number" min="0" max="24" value={editHours} onChange={e => setEditHours(e.target.value)}
-                                          style={{ width: '100%', boxSizing: 'border-box', background: '#1e293b', border: '1px solid #334155', borderRadius: 8, padding: '10px 12px', color: '#f1f5f9', fontSize: 16, fontFamily: 'inherit', outline: 'none', textAlign: 'center' }} />
-                                      </div>
-                                      <div style={{ display: 'flex', alignItems: 'center', paddingTop: 20, fontSize: 18, color: '#475569' }}>:</div>
-                                      <div style={{ flex: 1 }}>
-                                        <div style={{ fontSize: 10, color: '#475569', marginBottom: 4 }}>Minutos</div>
-                                        <input type="number" min="0" max="59" value={editMinutes} onChange={e => setEditMinutes(e.target.value)}
-                                          style={{ width: '100%', boxSizing: 'border-box', background: '#1e293b', border: '1px solid #334155', borderRadius: 8, padding: '10px 12px', color: '#f1f5f9', fontSize: 16, fontFamily: 'inherit', outline: 'none', textAlign: 'center' }} />
-                                      </div>
+                                  <div style={{ background: '#0f172a', borderRadius: 8, padding: 12, margin: '4px 0', border: '1px solid #6366f140' }}>
+                                    <div style={{ fontSize: 10, color: '#6366f1', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 10 }}>✏️ Editar dia {d}/{String(m).padStart(2,'0')}</div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
+                                      {[
+                                        { key: 'entrada', label: '▶ Entrada', color: '#22c55e' },
+                                        { key: 'almoco_ini', label: '🍽️ Início Almoço', color: '#f59e0b' },
+                                        { key: 'almoco_fim', label: '🔙 Volta Almoço', color: '#3b82f6' },
+                                        { key: 'saida', label: '■ Saída', color: '#ef4444' },
+                                      ].map(({ key, label, color }) => (
+                                        <div key={key}>
+                                          <div style={{ fontSize: 9, color, marginBottom: 4, fontWeight: 700 }}>{label}</div>
+                                          <input
+                                            type="time"
+                                            value={editTimes[key as keyof typeof editTimes]}
+                                            onChange={e => setEditTimes(t => ({ ...t, [key]: e.target.value }))}
+                                            style={{ width: '100%', boxSizing: 'border-box', background: '#1e293b', border: `1px solid ${color}40`, borderRadius: 8, padding: '8px 10px', color: '#f1f5f9', fontSize: 13, fontFamily: 'inherit', outline: 'none' }}
+                                          />
+                                        </div>
+                                      ))}
                                     </div>
+                                    {editTimes.entrada && editTimes.saida && (() => {
+                                      const tsE = timeToMs(editTimes.entrada, date)
+                                      const tsS = timeToMs(editTimes.saida, date)
+                                      const tsAI = timeToMs(editTimes.almoco_ini, date)
+                                      const tsAF = timeToMs(editTimes.almoco_fim, date)
+                                      if (!tsE || !tsS || tsS <= tsE) return null
+                                      let brk = 0
+                                      if (tsAI && tsAF && tsAF > tsAI) brk = tsAF - tsAI
+                                      const worked = Math.max(0, tsS - tsE - brk)
+                                      return (
+                                        <div style={{ background: '#22c55e15', border: '1px solid #22c55e30', borderRadius: 8, padding: '8px 12px', marginBottom: 10, display: 'flex', justifyContent: 'space-between' }}>
+                                          <span style={{ fontSize: 11, color: '#64748b' }}>Total calculado</span>
+                                          <span style={{ fontSize: 12, fontWeight: 800, color: '#22c55e' }}>{msToHHMM(worked)}</span>
+                                        </div>
+                                      )
+                                    })()}
                                     <div style={{ display: 'flex', gap: 8 }}>
                                       <Btn full onClick={saveEditedHours} color="#22c55e">💾 Salvar</Btn>
                                       <Btn full outline color="#64748b" onClick={() => setEditingDay(null)}>Cancelar</Btn>
