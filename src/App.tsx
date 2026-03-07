@@ -1254,11 +1254,11 @@ export default function PontoApp() {
 
                                     {/* Folga buttons */}
                                     <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-                                      <button onClick={() => markDayOff(emp.id, date, isPaidOff ? null : 'paid')}
+                                      <button onClick={async () => { await markDayOff(emp.id, date, isPaidOff ? null : 'paid'); setEditingDay(null) }}
                                         style={{ flex: 1, padding: '8px 0', borderRadius: 8, border: `1px solid ${isPaidOff ? '#7c3aed' : '#7c3aed40'}`, background: isPaidOff ? '#7c3aed30' : 'transparent', color: isPaidOff ? '#c4b5fd' : '#7c3aed', fontSize: 10, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
                                         🌴 {isPaidOff ? 'Remover Folga' : 'Folga Remunerada'}
                                       </button>
-                                      <button onClick={() => markDayOff(emp.id, date, isUnpaidOff ? null : 'unpaid')}
+                                      <button onClick={async () => { await markDayOff(emp.id, date, isUnpaidOff ? null : 'unpaid'); setEditingDay(null) }}
                                         style={{ flex: 1, padding: '8px 0', borderRadius: 8, border: `1px solid ${isUnpaidOff ? '#475569' : '#33415540'}`, background: isUnpaidOff ? '#33415530' : 'transparent', color: isUnpaidOff ? '#94a3b8' : '#475569', fontSize: 10, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
                                         ⚫ {isUnpaidOff ? 'Remover Folga' : 'Folga Não Rem.'}
                                       </button>
