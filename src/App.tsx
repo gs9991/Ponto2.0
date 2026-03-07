@@ -39,6 +39,13 @@ function formatHours(ms: number) {
 function fmt(v: number) {
   return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 }
+function msToHHMM(ms: number) {
+  if (!ms || ms < 0) return '0h00'
+  const total = Math.floor(ms / 60000)
+  const h = Math.floor(total / 60)
+  const m = total % 60
+  return `${h}h${String(m).padStart(2, '0')}`
+}
 
 const STATUS = { OUT: 'out', IN: 'in', BREAK: 'break' }
 const statusLabel: Record<string, string> = { out: 'Fora', in: 'Trabalhando', break: 'Pausa' }
@@ -63,6 +70,7 @@ interface LogEntry { type: string; time: Date }
 interface EmpState {
   status: string; log: LogEntry[]; workStart: Date | null; breakStart: Date | null
   totalWork: number; totalBreak: number; days: string[]
+  dailyWork: Record<string, number> // date string -> ms worked that day
 }
 
 interface User {
@@ -112,6 +120,17 @@ function Btn({ children, onClick, color = '#6366f1', disabled, full, small, outl
 
 const TODAY = () => new Date().toISOString().split('T')[0]
 
+// Get all days in a month
+function getDaysInMonth(year: number, month: number) {
+  const days: string[] = []
+  const d = new Date(year, month, 1)
+  while (d.getMonth() === month) {
+    days.push(d.toISOString().split('T')[0])
+    d.setDate(d.getDate() + 1)
+  }
+  return days
+}
+
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function PontoApp() {
   const [now, setNow] = useState(new Date())
@@ -142,6 +161,16 @@ export default function PontoApp() {
   const [expandedReport, setExpandedReport] = useState<number | null>(null)
   const [extractContent, setExtractContent] = useState<string | null>(null)
   const [extractCopied, setExtractCopied] = useState(false)
+
+  // Monthly map
+  const [mapTarget, setMapTarget] = useState<number | null>(null)
+  const [mapMonth, setMapMonth] = useState(() => {
+    const d = new Date()
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+  })
+  const [editingDay, setEditingDay] = useState<{ empId: number; date: string } | null>(null)
+  const [editHours, setEditHours] = useState('')
+  const [editMinutes, setEditMinutes] = useState('')
 
   // Geofence
   const [geofence, setGeofence] = useState<{ lat: number; lng: number; radius: number; address: string } | null>(null)
@@ -174,6 +203,7 @@ export default function PontoApp() {
           log: (data.log || []).map((e: { type: string; time: string }) => ({ type: e.type, time: new Date(e.time) })),
           workStart: data.workStart ? new Date(data.workStart) : null,
           breakStart: data.breakStart ? new Date(data.breakStart) : null,
+          dailyWork: data.dailyWork || {},
         } as EmpState
       })
       setRecords(recs)
@@ -204,7 +234,7 @@ export default function PontoApp() {
 
   // ── Punch ─────────────────────────────────────────────────────────────────
   const getState = (id: number): EmpState =>
-    records[id] || { status: STATUS.OUT, log: [], workStart: null, breakStart: null, totalWork: 0, totalBreak: 0, days: [] }
+    records[id] || { status: STATUS.OUT, log: [], workStart: null, breakStart: null, totalWork: 0, totalBreak: 0, days: [], dailyWork: {} }
 
   // ── Geofence helpers ──────────────────────────────────────────────────────
   const geocodeAddress = async (address: string): Promise<{ lat: number; lng: number } | null> => {
@@ -248,18 +278,31 @@ export default function PontoApp() {
       const todayStr = TODAY()
       const newLog = [...state.log, { type, time: ts }]
       let s: EmpState = { ...state, log: newLog }
-      if (type === 'entrada') { s.status = STATUS.IN; s.workStart = ts }
-      else if (type === 'saida') {
-        s.totalWork = (state.totalWork || 0) + (state.workStart ? ts.getTime() - state.workStart.getTime() : 0)
+      
+      if (type === 'entrada') {
+        s.status = STATUS.IN; s.workStart = ts
+      } else if (type === 'saida') {
+        const workedNow = state.workStart ? ts.getTime() - state.workStart.getTime() : 0
+        s.totalWork = (state.totalWork || 0) + workedNow
+        // Add to daily work
+        const dailyWork = { ...(state.dailyWork || {}) }
+        dailyWork[todayStr] = (dailyWork[todayStr] || 0) + workedNow
+        s.dailyWork = dailyWork
         s.status = STATUS.OUT; s.workStart = null
         if (!s.days.includes(todayStr)) s.days = [...s.days, todayStr]
       } else if (type === 'inicio_pausa') {
-        s.totalWork = (state.totalWork || 0) + (state.workStart ? ts.getTime() - state.workStart.getTime() : 0)
+        const workedNow = state.workStart ? ts.getTime() - state.workStart.getTime() : 0
+        s.totalWork = (state.totalWork || 0) + workedNow
+        // Add partial work to daily
+        const dailyWork = { ...(state.dailyWork || {}) }
+        dailyWork[todayStr] = (dailyWork[todayStr] || 0) + workedNow
+        s.dailyWork = dailyWork
         s.status = STATUS.BREAK; s.workStart = null; s.breakStart = ts
       } else if (type === 'fim_pausa') {
         s.totalBreak = (state.totalBreak || 0) + (state.breakStart ? ts.getTime() - state.breakStart.getTime() : 0)
         s.status = STATUS.IN; s.breakStart = null; s.workStart = ts
       }
+
       // Serialize dates for Firestore
       const serialized = {
         ...s,
@@ -381,11 +424,41 @@ export default function PontoApp() {
     await setDoc(doc(db, 'employees', String(empId)), updated)
   }
 
-  // ── Generate PDF Extract ──────────────────────────────────────────────────
+  // ── Edit daily hours (admin) ───────────────────────────────────────────────
+  const saveEditedHours = async () => {
+    if (!editingDay) return
+    const { empId, date } = editingDay
+    const h = parseInt(editHours) || 0
+    const m = parseInt(editMinutes) || 0
+    const ms = (h * 60 + m) * 60000
+    const state = getState(empId)
+    const oldMs = (state.dailyWork || {})[date] || 0
+    const diff = ms - oldMs
+    const newDailyWork = { ...(state.dailyWork || {}), [date]: ms }
+    const newTotalWork = Math.max(0, (state.totalWork || 0) + diff)
+    // Update days list
+    let newDays = [...(state.days || [])]
+    if (ms > 0 && !newDays.includes(date)) newDays = [...newDays, date]
+    if (ms === 0) newDays = newDays.filter(d => d !== date)
+    const updated = {
+      ...state,
+      dailyWork: newDailyWork,
+      totalWork: newTotalWork,
+      days: newDays,
+      log: state.log.map(e => ({ type: e.type, time: e.time.toISOString() })),
+      workStart: state.workStart ? state.workStart.toISOString() : null,
+      breakStart: state.breakStart ? state.breakStart.toISOString() : null,
+    }
+    await setDoc(doc(db, 'records', String(empId)), updated)
+    setEditingDay(null)
+    setEditHours('')
+    setEditMinutes('')
+  }
+
+  // ── Generate Extract ──────────────────────────────────────────────────────
   const generateExtract = (emp: Employee, state: EmpState, payment: ReturnType<typeof calcPayment>) => {
     const geradoEm = new Date().toLocaleString('pt-BR')
     const lines: string[] = []
-
     lines.push('EXTRATO DE HORAS TRABALHADAS')
     lines.push('PontoApp - Sistema de Controle de Ponto')
     lines.push('━'.repeat(48))
@@ -403,6 +476,17 @@ export default function PontoApp() {
     lines.push(`Valor por ${emp.payType === 'hour' ? 'Hora' : 'Dia '}  : ${fmt(emp.payValue)}`)
     lines.push(`Valor Bruto       : ${fmt(payment.grossValue)}`)
     lines.push('')
+    // Daily breakdown
+    if (state.dailyWork && Object.keys(state.dailyWork).length > 0) {
+      lines.push('━'.repeat(48))
+      lines.push('HORAS POR DIA')
+      lines.push('━'.repeat(48))
+      Object.entries(state.dailyWork).sort(([a], [b]) => a.localeCompare(b)).forEach(([date, ms]) => {
+        const [y, mo, d] = date.split('-')
+        lines.push(`${d}/${mo}/${y}  :  ${msToHHMM(ms)} (${formatDuration(ms)})`)
+      })
+      lines.push('')
+    }
     lines.push('━'.repeat(48))
     lines.push('DESCONTOS')
     lines.push('━'.repeat(48))
@@ -428,9 +512,7 @@ export default function PontoApp() {
     }
     lines.push('━'.repeat(48))
     lines.push('Documento gerado automaticamente pelo PontoApp.')
-
-    const content = lines.join("\n")
-    setExtractContent(content)
+    setExtractContent(lines.join('\n'))
     setExtractCopied(false)
   }
 
@@ -440,6 +522,12 @@ export default function PontoApp() {
   const liveBreak = empState ? (empState.totalBreak || 0) + (empState.breakStart ? now.getTime() - empState.breakStart.getTime() : 0) : 0
   const myEmpData = loggedIn?.role === 'employee' ? employees.find(e => e.id === loggedIn.id) : null
   const empPayment = myEmpData && empState ? calcPayment(myEmpData, empState, liveWork) : null
+
+  // Today's live work for employee
+  const todayStr = TODAY()
+  const todayLiveWork = empState
+    ? ((empState.dailyWork || {})[todayStr] || 0) + (empState.workStart ? now.getTime() - empState.workStart.getTime() : 0)
+    : 0
 
   // ─────────────────────────────────────────────────────────────────────────
   if (loading) return (
@@ -474,66 +562,27 @@ export default function PontoApp() {
           {/* ══ LOGIN ══════════════════════════════════════════════════════ */}
           {!loggedIn && (
             <div style={{ display: 'flex', flexDirection: 'column', minHeight: 'calc(100vh - 120px)', justifyContent: 'center' }}>
-              {/* Logo / Brand block */}
               <div style={{ textAlign: 'center', marginBottom: 36 }}>
-                <div style={{
-                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                  width: 72, height: 72, borderRadius: 20,
-                  background: 'linear-gradient(135deg, #6366f1 0%, #06b6d4 100%)',
-                  boxShadow: '0 0 40px #6366f140, 0 8px 24px #00000060',
-                  marginBottom: 20, fontSize: 32
-                }}>⏱</div>
+                <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 72, height: 72, borderRadius: 20, background: 'linear-gradient(135deg, #6366f1 0%, #06b6d4 100%)', boxShadow: '0 0 40px #6366f140, 0 8px 24px #00000060', marginBottom: 20, fontSize: 32 }}>⏱</div>
                 <div style={{ fontSize: 26, fontWeight: 900, color: '#f1f5f9', letterSpacing: '-0.5px' }}>PontoApp</div>
                 <div style={{ fontSize: 12, color: '#475569', marginTop: 6, letterSpacing: 2, textTransform: 'uppercase' }}>Controle de Ponto Digital</div>
               </div>
-
-              {/* Divider line with label */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>
                 <div style={{ flex: 1, height: 1, background: '#1e293b' }} />
                 <div style={{ fontSize: 10, color: '#334155', letterSpacing: 3, textTransform: 'uppercase' }}>Acesso Seguro</div>
                 <div style={{ flex: 1, height: 1, background: '#1e293b' }} />
               </div>
-
-              {/* Form card */}
-              <div style={{
-                background: 'linear-gradient(160deg, #1e293b 0%, #162032 100%)',
-                borderRadius: 20,
-                padding: '28px 24px',
-                border: '1px solid #334155',
-                boxShadow: '0 20px 60px #00000050',
-                marginBottom: 16
-              }}>
+              <div style={{ background: 'linear-gradient(160deg, #1e293b 0%, #162032 100%)', borderRadius: 20, padding: '28px 24px', border: '1px solid #334155', boxShadow: '0 20px 60px #00000050', marginBottom: 16 }}>
                 <Input label="Usuário" value={loginUser} onChange={setLoginUser} placeholder="Digite seu usuário" />
                 <Input label="Senha" type="password" value={loginPass} onChange={setLoginPass} placeholder="••••••••" error={loginError} />
                 <div style={{ marginTop: 8 }}>
-                  <button
-                    onClick={handleLogin}
-                    style={{
-                      width: '100%',
-                      padding: '14px 20px',
-                      borderRadius: 12,
-                      border: 'none',
-                      cursor: 'pointer',
-                      background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)',
-                      color: '#fff',
-                      fontSize: 14,
-                      fontWeight: 800,
-                      fontFamily: 'inherit',
-                      letterSpacing: 1,
-                      boxShadow: '0 4px 20px #6366f140',
-                      transition: 'opacity 0.2s',
-                    }}
-                  >
+                  <button onClick={handleLogin} style={{ width: '100%', padding: '14px 20px', borderRadius: 12, border: 'none', cursor: 'pointer', background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)', color: '#fff', fontSize: 14, fontWeight: 800, fontFamily: 'inherit', letterSpacing: 1, boxShadow: '0 4px 20px #6366f140' }}>
                     ENTRAR NO SISTEMA →
                   </button>
                 </div>
               </div>
-
-              {/* Footer info */}
               <div style={{ textAlign: 'center', marginTop: 8 }}>
-                <div style={{ fontSize: 10, color: '#1e293b', letterSpacing: 2, textTransform: 'uppercase' }}>
-                  🔒 Conexão protegida
-                </div>
+                <div style={{ fontSize: 10, color: '#1e293b', letterSpacing: 2, textTransform: 'uppercase' }}>🔒 Conexão protegida</div>
               </div>
             </div>
           )}
@@ -565,7 +614,7 @@ export default function PontoApp() {
                     </div>
                     <div style={{ display: 'flex', gap: 8 }}>
                       {[
-                        { label: 'Trabalhado', val: formatDuration(liveWork), sub: formatHours(liveWork), color: '#22c55e' },
+                        { label: 'Hoje', val: msToHHMM(todayLiveWork), sub: formatDuration(todayLiveWork), color: '#22c55e' },
                         { label: 'Pausas', val: formatDuration(liveBreak), sub: formatHours(liveBreak), color: '#f59e0b' },
                         { label: 'A receber', val: empPayment ? fmt(empPayment.net) : fmt(0), sub: loggedIn.payType === 'hour' ? 'por hora' : 'por dia', color: '#6366f1' },
                       ].map(({ label, val, sub, color }) => (
@@ -614,6 +663,24 @@ export default function PontoApp() {
                     ))}
                   </div>
 
+                  {/* Daily breakdown */}
+                  {empState.dailyWork && Object.keys(empState.dailyWork).length > 0 && (
+                    <div style={{ background: '#1e293b', borderRadius: 12, padding: 14, marginBottom: 14, border: '1px solid #334155' }}>
+                      <div style={{ fontSize: 10, letterSpacing: 3, color: '#475569', textTransform: 'uppercase', marginBottom: 10 }}>📅 Horas por Dia</div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        {Object.entries(empState.dailyWork).sort(([a], [b]) => b.localeCompare(a)).slice(0, 7).map(([date, ms]) => {
+                          const [y, mo, d] = date.split('-')
+                          return (
+                            <div key={date} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 10px', background: '#0f172a', borderRadius: 8 }}>
+                              <span style={{ fontSize: 12, color: '#cbd5e1' }}>{d}/{mo}/{y}</span>
+                              <span style={{ fontSize: 12, fontWeight: 700, color: '#22c55e' }}>{msToHHMM(ms as number)}</span>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
+
                   {empState.log.length > 0 && (
                     <div style={{ background: '#1e293b', borderRadius: 12, padding: 14, border: '1px solid #334155' }}>
                       <div style={{ fontSize: 10, letterSpacing: 3, color: '#475569', textTransform: 'uppercase', marginBottom: 10 }}>Registros de Hoje</div>
@@ -639,7 +706,6 @@ export default function PontoApp() {
                     <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>Valor líquido a receber</div>
                   </div>
 
-                  {/* Resumo */}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 14 }}>
                     {[
                       { label: '⏱ Horas Trabalhadas', val: formatHours(empPayment.totalMs), sub: formatDuration(empPayment.totalMs), color: '#22c55e' },
@@ -660,7 +726,6 @@ export default function PontoApp() {
                   {/* Descontos */}
                   <div style={{ background: '#1e293b', borderRadius: 14, padding: 14, marginBottom: 14, border: '1px solid #ef444430' }}>
                     <div style={{ fontSize: 10, letterSpacing: 3, color: '#ef4444', textTransform: 'uppercase', marginBottom: 10 }}>⬇ Descontos Aplicados</div>
-
                     {myEmpData.discounts.length === 0 && empPayment.autoDeductions === 0 ? (
                       <div style={{ fontSize: 12, color: '#475569', textAlign: 'center', padding: '8px 0' }}>Nenhum desconto aplicado ✅</div>
                     ) : (
@@ -670,7 +735,7 @@ export default function PontoApp() {
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                               <div>
                                 <div style={{ fontSize: 12, fontWeight: 700, color: '#fbbf24' }}>Pausas Excessivas</div>
-                                <div style={{ fontSize: 10, color: '#64748b', marginTop: 2 }}>Desconto automático por horas de pausa além do permitido</div>
+                                <div style={{ fontSize: 10, color: '#64748b', marginTop: 2 }}>Desconto automático</div>
                               </div>
                               <div style={{ fontSize: 13, fontWeight: 800, color: '#f59e0b', flexShrink: 0, marginLeft: 8 }}>- {fmt(empPayment.autoDeductions)}</div>
                             </div>
@@ -689,7 +754,6 @@ export default function PontoApp() {
                         ))}
                       </div>
                     )}
-
                     {(myEmpData.discounts.length > 0 || empPayment.autoDeductions > 0) && (
                       <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid #334155', display: 'flex', justifyContent: 'space-between' }}>
                         <span style={{ fontSize: 12, color: '#94a3b8', fontWeight: 600 }}>Total de Descontos</span>
@@ -698,7 +762,6 @@ export default function PontoApp() {
                     )}
                   </div>
 
-                  {/* Total */}
                   <div style={{ background: '#22c55e20', border: '1px solid #22c55e60', borderRadius: 14, padding: 16, textAlign: 'center', marginBottom: 14 }}>
                     <div style={{ fontSize: 10, color: '#4ade80', textTransform: 'uppercase', letterSpacing: 2, marginBottom: 6 }}>Total a Receber</div>
                     <div style={{ fontSize: 30, fontWeight: 900, color: '#22c55e' }}>{fmt(empPayment.net)}</div>
@@ -706,7 +769,6 @@ export default function PontoApp() {
                       {myEmpData.payType === 'hour' ? `${fmt(myEmpData.payValue)} por hora` : `${fmt(myEmpData.payValue)} por dia`}
                     </div>
                   </div>
-
                 </div>
               )}
 
@@ -740,9 +802,9 @@ export default function PontoApp() {
           {/* ══ ADMIN ══════════════════════════════════════════════════════ */}
           {loggedIn?.role === 'admin' && (
             <>
-              <div style={{ display: 'flex', gap: 6, marginBottom: 16 }}>
-                {[['list', '👥 Equipe'], ['reports', '💰 Pagamentos'], ['geofence', '📍 Local']].map(([key, label]) => (
-                  <button key={key} onClick={() => { setView(key); if (key === 'list') setAdminView('list') }} style={{ flex: 1, padding: '8px 0', borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: 11, fontWeight: 700, fontFamily: 'inherit', background: view === key ? '#6366f1' : '#1e293b', color: view === key ? '#fff' : '#64748b' }}>{label}</button>
+              <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
+                {[['list', '👥 Equipe'], ['reports', '💰 Pagamentos'], ['monthly', '📅 Mapa Mensal'], ['geofence', '📍 Local']].map(([key, label]) => (
+                  <button key={key} onClick={() => { setView(key); if (key === 'list') setAdminView('list') }} style={{ flex: 1, minWidth: 70, padding: '8px 4px', borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: 10, fontWeight: 700, fontFamily: 'inherit', background: view === key ? '#6366f1' : '#1e293b', color: view === key ? '#fff' : '#64748b' }}>{label}</button>
                 ))}
               </div>
 
@@ -834,7 +896,6 @@ export default function PontoApp() {
                 <div>
                   <div style={{ fontSize: 10, letterSpacing: 3, color: '#475569', textTransform: 'uppercase', marginBottom: 14 }}>Relatório de Pagamentos</div>
 
-                  {/* Total geral */}
                   <div style={{ background: 'linear-gradient(135deg,#1e293b,#0f172a)', borderRadius: 16, padding: 16, marginBottom: 14, border: '1px solid #22c55e30' }}>
                     <div style={{ fontSize: 10, color: '#475569', textTransform: 'uppercase', letterSpacing: 2, marginBottom: 6 }}>💰 Total a Pagar</div>
                     <div style={{ fontSize: 30, fontWeight: 900, color: '#22c55e' }}>
@@ -856,7 +917,6 @@ export default function PontoApp() {
 
                     return (
                       <div key={emp.id} style={{ background: '#1e293b', borderRadius: 14, padding: 16, marginBottom: 12, border: '1px solid #334155' }}>
-                        {/* Card header */}
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: isOpen ? 14 : 0 }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                             <div style={{ width: 38, height: 38, borderRadius: '50%', background: '#6366f1', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 800, color: '#fff' }}>{emp.avatar}</div>
@@ -875,7 +935,6 @@ export default function PontoApp() {
 
                         {isOpen && (
                           <div>
-                            {/* Resumo financeiro */}
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 14 }}>
                               {[
                                 { label: '⏱ Horas Trabalhadas', val: formatHours(pay.totalMs) + ' (' + formatDuration(pay.totalMs) + ')', color: '#22c55e' },
@@ -900,7 +959,6 @@ export default function PontoApp() {
                                 </button>
                               </div>
 
-                              {/* Form desconto */}
                               {isAddingDiscount && (
                                 <div style={{ background: '#1e293b', borderRadius: 10, padding: 12, marginBottom: 10, border: '1px solid #334155' }}>
                                   <div style={{ fontSize: 10, letterSpacing: 2, color: '#475569', textTransform: 'uppercase', marginBottom: 10 }}>Novo Desconto</div>
@@ -911,7 +969,7 @@ export default function PontoApp() {
                                   </div>
                                   <div style={{ marginBottom: 10 }}>
                                     <div style={{ fontSize: 10, letterSpacing: 2, color: '#475569', textTransform: 'uppercase', marginBottom: 6 }}>Motivo / Observação</div>
-                                    <textarea value={discountForm.reason} onChange={e => setDiscountForm(f => ({ ...f, reason: e.target.value }))} placeholder="Ex: Falta não justificada, Adiantamento, Equipamento danificado..."
+                                    <textarea value={discountForm.reason} onChange={e => setDiscountForm(f => ({ ...f, reason: e.target.value }))} placeholder="Ex: Falta não justificada..."
                                       rows={3} style={{ width: '100%', boxSizing: 'border-box', background: '#0f172a', border: '1px solid #334155', borderRadius: 8, padding: '10px 12px', color: '#f1f5f9', fontSize: 12, fontFamily: 'inherit', outline: 'none', resize: 'none' }} />
                                   </div>
                                   {discountError && <div style={{ fontSize: 11, color: '#ef4444', marginBottom: 8 }}>⚠️ {discountError}</div>}
@@ -919,7 +977,6 @@ export default function PontoApp() {
                                 </div>
                               )}
 
-                              {/* Lista de descontos */}
                               {pay.autoDeductions > 0 && (
                                 <div style={{ background: '#1e293b', borderRadius: 8, padding: '10px 12px', marginBottom: 6, borderLeft: '3px solid #f59e0b' }}>
                                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
@@ -959,13 +1016,11 @@ export default function PontoApp() {
                               )}
                             </div>
 
-                            {/* Total líquido */}
                             <div style={{ background: '#22c55e20', border: '1px solid #22c55e40', borderRadius: 10, padding: '12px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                               <span style={{ fontSize: 13, fontWeight: 700, color: '#4ade80' }}>✅ Total Líquido</span>
                               <span style={{ fontSize: 18, fontWeight: 900, color: '#22c55e' }}>{fmt(pay.net)}</span>
                             </div>
 
-                            {/* Botão Extrato Admin */}
                             <button
                               onClick={() => { generateExtract(emp, st, pay); setExtractCopied(false) }}
                               style={{ width: '100%', padding: '12px', borderRadius: 12, border: '1.5px solid #6366f160', cursor: 'pointer', background: 'linear-gradient(135deg,#6366f115,#06b6d415)', color: '#a5b4fc', fontSize: 12, fontWeight: 800, fontFamily: 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
@@ -978,7 +1033,7 @@ export default function PontoApp() {
                     )
                   })}
 
-                  {/* Modal Extrato Admin */}
+                  {/* Modal Extrato */}
                   {extractContent && (
                     <div style={{ position: 'fixed', inset: 0, background: '#000000cc', zIndex: 100, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
                       <div style={{ width: '100%', maxWidth: 420, background: '#0f172a', borderRadius: '20px 20px 0 0', border: '1px solid #334155', maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}>
@@ -990,28 +1045,159 @@ export default function PontoApp() {
                           <pre style={{ margin: 0, fontFamily: "'Courier New', monospace", fontSize: 11, color: '#94a3b8', lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{extractContent}</pre>
                         </div>
                         <div style={{ padding: '14px 20px', borderTop: '1px solid #1e293b', flexShrink: 0, display: 'flex', gap: 10 }}>
-                          <button
-                            onClick={() => { navigator.clipboard.writeText(extractContent); setExtractCopied(true); setTimeout(() => setExtractCopied(false), 2500) }}
-                            style={{ flex: 1, padding: '13px', borderRadius: 12, border: 'none', cursor: 'pointer', background: extractCopied ? '#16a34a' : 'linear-gradient(135deg,#6366f1,#4f46e5)', color: '#fff', fontSize: 13, fontWeight: 800, fontFamily: 'inherit' }}
-                          >
+                          <button onClick={() => { navigator.clipboard.writeText(extractContent); setExtractCopied(true); setTimeout(() => setExtractCopied(false), 2500) }}
+                            style={{ flex: 1, padding: '13px', borderRadius: 12, border: 'none', cursor: 'pointer', background: extractCopied ? '#16a34a' : 'linear-gradient(135deg,#6366f1,#4f46e5)', color: '#fff', fontSize: 13, fontWeight: 800, fontFamily: 'inherit' }}>
                             {extractCopied ? '✅ Copiado!' : '📋 Copiar'}
                           </button>
-                          <button
-                            onClick={() => {
-                              const win = window.open('', '_blank')
-                              if (win) {
-                                win.document.write(`<html><head><title>Extrato de Horas</title><style>body{font-family:'Courier New',monospace;font-size:13px;line-height:1.8;padding:32px;color:#000;background:#fff;}pre{white-space:pre-wrap;word-break:break-word;}@media print{body{padding:20px;}}</style></head><body><pre>${extractContent}</pre><script>window.onload=()=>{window.print();window.onafterprint=()=>window.close()}<\/script></body></html>`)
-                                win.document.close()
-                              }
-                            }}
-                            style={{ flex: 1, padding: '13px', borderRadius: 12, border: '1.5px solid #334155', cursor: 'pointer', background: '#1e293b', color: '#94a3b8', fontSize: 13, fontWeight: 800, fontFamily: 'inherit' }}
-                          >
+                          <button onClick={() => {
+                            const win = window.open('', '_blank')
+                            if (win) {
+                              win.document.write(`<html><head><title>Extrato</title><style>body{font-family:'Courier New',monospace;font-size:13px;line-height:1.8;padding:32px;}pre{white-space:pre-wrap;}</style></head><body><pre>${extractContent}</pre><script>window.onload=()=>{window.print();window.onafterprint=()=>window.close()}<\/script></body></html>`)
+                              win.document.close()
+                            }
+                          }} style={{ flex: 1, padding: '13px', borderRadius: 12, border: '1.5px solid #334155', cursor: 'pointer', background: '#1e293b', color: '#94a3b8', fontSize: 13, fontWeight: 800, fontFamily: 'inherit' }}>
                             🖨️ Imprimir
                           </button>
                         </div>
                       </div>
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* ══ MAPA MENSAL ══════════════════════════════════════════════ */}
+              {view === 'monthly' && (
+                <div>
+                  <div style={{ fontSize: 10, letterSpacing: 3, color: '#475569', textTransform: 'uppercase', marginBottom: 14 }}>📅 Mapa Mensal de Horas</div>
+
+                  {/* Month selector */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, background: '#1e293b', borderRadius: 12, padding: '10px 14px', border: '1px solid #334155' }}>
+                    <button onClick={() => {
+                      const [y, m] = mapMonth.split('-').map(Number)
+                      const d = new Date(y, m - 2, 1)
+                      setMapMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`)
+                    }} style={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, padding: '6px 12px', cursor: 'pointer', color: '#94a3b8', fontSize: 14, fontFamily: 'inherit' }}>◀</button>
+                    <div style={{ flex: 1, textAlign: 'center' }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: '#f1f5f9' }}>
+                        {new Date(mapMonth + '-01').toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' }).replace(/^\w/, c => c.toUpperCase())}
+                      </div>
+                    </div>
+                    <button onClick={() => {
+                      const [y, m] = mapMonth.split('-').map(Number)
+                      const d = new Date(y, m, 1)
+                      setMapMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`)
+                    }} style={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, padding: '6px 12px', cursor: 'pointer', color: '#94a3b8', fontSize: 14, fontFamily: 'inherit' }}>▶</button>
+                  </div>
+
+                  {/* Employee selector */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
+                    {employees.map(emp => (
+                      <button key={emp.id} onClick={() => setMapTarget(mapTarget === emp.id ? null : emp.id)}
+                        style={{ background: mapTarget === emp.id ? '#6366f120' : '#1e293b', border: `1px solid ${mapTarget === emp.id ? '#6366f160' : '#334155'}`, borderRadius: 12, padding: '12px 14px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontFamily: 'inherit' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <div style={{ width: 34, height: 34, borderRadius: '50%', background: '#6366f1', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 800, color: '#fff' }}>{emp.avatar}</div>
+                          <div style={{ textAlign: 'left' }}>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: '#f1f5f9' }}>{emp.name}</div>
+                            <div style={{ fontSize: 10, color: '#64748b' }}>{emp.role}</div>
+                          </div>
+                        </div>
+                        <div style={{ fontSize: 11, color: '#6366f1', fontWeight: 700 }}>{mapTarget === emp.id ? 'fechar ▲' : 'ver mapa ▼'}</div>
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Monthly calendar for selected employee */}
+                  {mapTarget !== null && (() => {
+                    const emp = employees.find(e => e.id === mapTarget)
+                    if (!emp) return null
+                    const st = getState(emp.id)
+                    const [y, m] = mapMonth.split('-').map(Number)
+                    const days = getDaysInMonth(y, m - 1)
+                    const dailyWork = st.dailyWork || {}
+                    const monthTotal = days.reduce((sum, d) => sum + (dailyWork[d] || 0), 0)
+
+                    return (
+                      <div style={{ background: '#1e293b', borderRadius: 14, padding: 16, border: '1px solid #334155', marginBottom: 16 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                          <div style={{ fontSize: 13, fontWeight: 800, color: '#f1f5f9' }}>{emp.name}</div>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: '#22c55e' }}>Total: {msToHHMM(monthTotal)}</div>
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          {days.map(date => {
+                            const ms = dailyWork[date] || 0
+                            const [, , d] = date.split('-')
+                            const weekday = new Date(date + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'short' })
+                            const isToday = date === todayStr
+                            const isEditing = editingDay?.empId === emp.id && editingDay?.date === date
+                            const isWeekend = new Date(date + 'T12:00:00').getDay() === 0 || new Date(date + 'T12:00:00').getDay() === 6
+
+                            return (
+                              <div key={date}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', background: isToday ? '#6366f115' : '#0f172a', borderRadius: 8, border: isToday ? '1px solid #6366f140' : '1px solid transparent' }}>
+                                  <div style={{ width: 28, textAlign: 'center' }}>
+                                    <div style={{ fontSize: 13, fontWeight: 700, color: isToday ? '#a5b4fc' : isWeekend ? '#475569' : '#94a3b8' }}>{d}</div>
+                                    <div style={{ fontSize: 9, color: '#475569', textTransform: 'uppercase' }}>{weekday}</div>
+                                  </div>
+                                  <div style={{ flex: 1 }}>
+                                    {ms > 0 ? (
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                        <div style={{ flex: 1, height: 6, background: '#1e293b', borderRadius: 3, overflow: 'hidden' }}>
+                                          <div style={{ height: '100%', background: '#22c55e', borderRadius: 3, width: `${Math.min(100, (ms / (emp.hoursPerDay * 3600000)) * 100)}%` }} />
+                                        </div>
+                                        <span style={{ fontSize: 12, fontWeight: 700, color: '#22c55e', minWidth: 42 }}>{msToHHMM(ms)}</span>
+                                      </div>
+                                    ) : (
+                                      <div style={{ fontSize: 11, color: isWeekend ? '#334155' : '#475569' }}>{isWeekend ? '—' : 'Sem registro'}</div>
+                                    )}
+                                  </div>
+                                  <button onClick={() => {
+                                    if (isEditing) { setEditingDay(null); return }
+                                    setEditingDay({ empId: emp.id, date })
+                                    const h = Math.floor(ms / 3600000)
+                                    const min = Math.floor((ms % 3600000) / 60000)
+                                    setEditHours(String(h))
+                                    setEditMinutes(String(min))
+                                  }} style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 6, padding: '4px 8px', cursor: 'pointer', color: '#64748b', fontSize: 10, fontFamily: 'inherit' }}>
+                                    {isEditing ? '✕' : '✏️'}
+                                  </button>
+                                </div>
+
+                                {/* Edit form */}
+                                {isEditing && (
+                                  <div style={{ background: '#0f172a', borderRadius: 8, padding: 12, margin: '4px 0 4px 0', border: '1px solid #6366f140' }}>
+                                    <div style={{ fontSize: 10, color: '#6366f1', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 10 }}>✏️ Editar horas do dia {d}/{String(m).padStart(2, '0')}</div>
+                                    <div style={{ display: 'flex', gap: 10, marginBottom: 10 }}>
+                                      <div style={{ flex: 1 }}>
+                                        <div style={{ fontSize: 10, color: '#475569', marginBottom: 4 }}>Horas</div>
+                                        <input type="number" min="0" max="24" value={editHours} onChange={e => setEditHours(e.target.value)}
+                                          style={{ width: '100%', boxSizing: 'border-box', background: '#1e293b', border: '1px solid #334155', borderRadius: 8, padding: '10px 12px', color: '#f1f5f9', fontSize: 16, fontFamily: 'inherit', outline: 'none', textAlign: 'center' }} />
+                                      </div>
+                                      <div style={{ display: 'flex', alignItems: 'center', paddingTop: 20, fontSize: 18, color: '#475569' }}>:</div>
+                                      <div style={{ flex: 1 }}>
+                                        <div style={{ fontSize: 10, color: '#475569', marginBottom: 4 }}>Minutos</div>
+                                        <input type="number" min="0" max="59" value={editMinutes} onChange={e => setEditMinutes(e.target.value)}
+                                          style={{ width: '100%', boxSizing: 'border-box', background: '#1e293b', border: '1px solid #334155', borderRadius: 8, padding: '10px 12px', color: '#f1f5f9', fontSize: 16, fontFamily: 'inherit', outline: 'none', textAlign: 'center' }} />
+                                      </div>
+                                    </div>
+                                    <div style={{ display: 'flex', gap: 8 }}>
+                                      <Btn full onClick={saveEditedHours} color="#22c55e">💾 Salvar</Btn>
+                                      <Btn full outline color="#64748b" onClick={() => setEditingDay(null)}>Cancelar</Btn>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          })}
+                        </div>
+
+                        <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid #334155', display: 'flex', justifyContent: 'space-between' }}>
+                          <span style={{ fontSize: 12, color: '#64748b' }}>Total do mês</span>
+                          <span style={{ fontSize: 14, fontWeight: 800, color: '#22c55e' }}>{msToHHMM(monthTotal)}</span>
+                        </div>
+                      </div>
+                    )
+                  })()}
                 </div>
               )}
 
