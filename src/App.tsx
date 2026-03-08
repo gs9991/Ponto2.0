@@ -74,6 +74,7 @@ interface EmpState {
   dailyWork: Record<string, number> // date string -> ms worked that day
   dailyOff: Record<string, 'paid' | 'unpaid'> // date string -> folga remunerada ou nao
   dailyNight: Record<string, number> // date string -> ms noturnos naquele dia
+  dailyOvertimeRate: Record<string, number> // date string -> % hora extra daquele dia
 }
 
 interface User {
@@ -173,6 +174,7 @@ export default function PontoApp() {
   })
   const [editingDay, setEditingDay] = useState<{ empId: number; date: string } | null>(null)
   const [editTimes, setEditTimes] = useState({ entrada: '', almoco_ini: '', almoco_fim: '', saida: '' })
+  const [editOvertimeRate, setEditOvertimeRate] = useState<number | null>(null)
 
   // Geofence
   const [geofence, setGeofence] = useState<{ lat: number; lng: number; radius: number; address: string } | null>(null)
@@ -208,6 +210,7 @@ export default function PontoApp() {
           dailyWork: data.dailyWork || {},
           dailyOff: data.dailyOff || {},
           dailyNight: data.dailyNight || {},
+          dailyOvertimeRate: data.dailyOvertimeRate || {},
         } as EmpState
       })
       setRecords(recs)
@@ -238,7 +241,7 @@ export default function PontoApp() {
 
   // ── Punch ─────────────────────────────────────────────────────────────────
   const getState = (id: number): EmpState =>
-    records[id] || { status: STATUS.OUT, log: [], workStart: null, breakStart: null, totalWork: 0, totalBreak: 0, days: [], dailyWork: {}, dailyOff: {}, dailyNight: {} }
+    records[id] || { status: STATUS.OUT, log: [], workStart: null, breakStart: null, totalWork: 0, totalBreak: 0, days: [], dailyWork: {}, dailyOff: {}, dailyNight: {}, dailyOvertimeRate: {} }
 
   // ── Geofence helpers ──────────────────────────────────────────────────────
   const geocodeAddress = async (address: string): Promise<{ lat: number; lng: number } | null> => {
@@ -373,14 +376,23 @@ export default function PontoApp() {
     const paidOffDays = Object.values(state.dailyOff || {}).filter(v => v === 'paid').length
     const totalPaidDays = daysWorked + paidOffDays
 
-    // Overtime: ms worked beyond hoursPerDay each day
+    // Overtime: ms worked beyond hoursPerDay each day, per-day rate
     const journeyMs = emp.hoursPerDay * 3600000
-    const overtimeMs = Object.entries(state.dailyWork || {}).reduce((acc, [, ms]) => {
-      return acc + Math.max(0, ms - journeyMs)
-    }, 0)
-    const regularMs = Math.max(0, totalMs - overtimeMs)
-    const overtimeRate = emp.overtimeRate || 50
+    const defaultRate = emp.overtimeRate || 50
     const hourValue = emp.payType === 'hour' ? emp.payValue : emp.payValue / emp.hoursPerDay
+
+    let overtimeMs = 0
+    let overtimeValue = 0
+    Object.entries(state.dailyWork || {}).forEach(([date, ms]) => {
+      const extra = Math.max(0, ms - journeyMs)
+      if (extra > 0) {
+        const rate = (state.dailyOvertimeRate || {})[date] ?? defaultRate
+        overtimeMs += extra
+        overtimeValue += (extra / 3600000) * hourValue * (1 + rate / 100)
+      }
+    })
+    const regularMs = Math.max(0, totalMs - overtimeMs)
+    const overtimeRate = defaultRate // for display fallback
 
     // Night hours: 20% bonus (22h-5h)
     const nightMs = Object.values(state.dailyNight || {}).reduce((a, v) => a + v, 0)
@@ -390,11 +402,9 @@ export default function PontoApp() {
     if (emp.payType === 'hour') {
       const paidOffMs = paidOffDays * emp.hoursPerDay * 3600000
       const regularValue = (regularMs + paidOffMs) / 3600000 * emp.payValue
-      const overtimeValue = (overtimeMs / 3600000) * emp.payValue * (1 + overtimeRate / 100)
       grossValue = regularValue + overtimeValue + nightBonus
       autoDeductions = Math.max(0, breakHours - daysWorked) * emp.payValue
     } else {
-      const overtimeValue = (overtimeMs / 3600000) * hourValue * (1 + overtimeRate / 100)
       grossValue = totalPaidDays * emp.payValue + overtimeValue + nightBonus
     }
 
@@ -526,6 +536,9 @@ export default function PontoApp() {
     const newDailyWork = { ...(state.dailyWork || {}), [date]: workedMs }
     const newTotalWork = Math.max(0, (state.totalWork || 0) + diff)
     const newDailyNight = { ...(state.dailyNight || {}), [date]: nightWorkedMs }
+    const newDailyOvertimeRate = { ...(state.dailyOvertimeRate || {}) }
+    if (editOvertimeRate !== null) newDailyOvertimeRate[date] = editOvertimeRate
+    else delete newDailyOvertimeRate[date]
 
     let newDays = [...(state.days || [])]
     if (workedMs > 0 && !newDays.includes(date)) newDays = [...newDays, date]
@@ -535,6 +548,7 @@ export default function PontoApp() {
       ...state,
       dailyWork: newDailyWork,
       dailyNight: newDailyNight,
+      dailyOvertimeRate: newDailyOvertimeRate,
       totalWork: newTotalWork,
       days: newDays,
       log: allLogs.map(e => ({ type: e.type, time: e.time.toISOString() })),
@@ -544,6 +558,7 @@ export default function PontoApp() {
     await setDoc(doc(db, 'records', String(empId)), updated)
     setEditingDay(null)
     setEditTimes({ entrada: '', almoco_ini: '', almoco_fim: '', saida: '' })
+    setEditOvertimeRate(null)
   }
 
   // ── Mark day off ─────────────────────────────────────────────────────────
@@ -1334,6 +1349,7 @@ export default function PontoApp() {
                                       almoco_fim: getTime('fim_pausa'),
                                       saida: getTime('saida'),
                                     })
+                                    setEditOvertimeRate((st.dailyOvertimeRate || {})[date] ?? null)
                                   }} style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 6, padding: '4px 8px', cursor: 'pointer', color: '#64748b', fontSize: 10, fontFamily: 'inherit' }}>
                                     {isEditing ? '✕' : '✏️'}
                                   </button>
@@ -1361,6 +1377,24 @@ export default function PontoApp() {
                                       <div style={{ flex: 1, height: 1, background: '#1e293b' }} />
                                       <span style={{ fontSize: 9, color: '#334155', letterSpacing: 2 }}>OU EDITAR HORÁRIOS</span>
                                       <div style={{ flex: 1, height: 1, background: '#1e293b' }} />
+                                    </div>
+
+                                    {/* Per-day overtime rate */}
+                                    <div style={{ marginBottom: 12 }}>
+                                      <div style={{ fontSize: 9, color: '#f59e0b', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 6, fontWeight: 700 }}>⚡ % Hora Extra neste dia</div>
+                                      <div style={{ display: 'flex', background: '#0f172a', borderRadius: 8, padding: 3, gap: 2 }}>
+                                        {([null, 50, 70, 100] as (number | null)[]).map(rate => {
+                                          const empDefaultRate = employees.find(e => e.id === emp.id)?.overtimeRate || 50
+                                          const isSelected = editOvertimeRate === rate
+                                          const label = rate === null ? `Padrão (${empDefaultRate}%)` : `+${rate}%`
+                                          return (
+                                            <button key={String(rate)} onClick={() => setEditOvertimeRate(rate)}
+                                              style={{ flex: 1, padding: '7px 0', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 10, fontWeight: 700, fontFamily: 'inherit', background: isSelected ? '#f59e0b' : 'transparent', color: isSelected ? '#000' : '#64748b', transition: 'all 0.15s' }}>
+                                              {label}
+                                            </button>
+                                          )
+                                        })}
+                                      </div>
                                     </div>
 
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
