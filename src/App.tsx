@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { initializeApp } from 'firebase/app'
-import { initializeFirestore, collection, doc, onSnapshot, setDoc, deleteDoc } from 'firebase/firestore'
+import { initializeFirestore, collection, doc, onSnapshot, setDoc, deleteDoc, getDocs, query, where } from 'firebase/firestore'
 
 const firebaseConfig = {
   apiKey: "AIzaSyAMkmq0EdQt8y9tMA9UFH5feI2YyccHaa8",
@@ -13,7 +13,9 @@ const firebaseConfig = {
 const firebaseApp = initializeApp(firebaseConfig)
 const db = initializeFirestore(firebaseApp, { experimentalForceLongPolling: true })
 
-const ADMIN_CRED = { username: 'admin', password: 'admin123' }
+// ─── CREDENCIAIS ────────────────────────────────────────────────────────────
+// Super-admin: acessa todas as empresas e pode criar/excluir empresas
+const SUPER_ADMIN = { username: 'superadmin', password: 'super@2024' }
 
 function formatTime(d: Date) { return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) }
 function formatDate(d: Date) { return d.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' }) }
@@ -43,12 +45,20 @@ const typeColor: Record<string,string> = { entrada:'#22c55e', saida:'#ef4444', i
 
 interface Discount { id: number; value: number; reason: string; date: string }
 interface Company { name: string; cnpj: string; address: string; phone: string; email: string; logo: string }
+interface CompanyMeta {
+  slug: string          // código único ex: "empresa123"
+  name: string
+  adminUsername: string
+  adminPassword: string
+  createdAt: string
+}
 interface Employee {
   id: number; name: string; role: string; username: string; password: string; avatar: string
   payType: 'day'|'hour'; payValue: number; hoursPerDay: number
   overtimeRate: 50|70|100
   discounts: Discount[]; gratifications: Discount[]
   cpf?: string; admission?: string; fgts?: boolean
+  companySlug: string   // para filtrar por empresa
 }
 interface LogEntry { type: string; time: Date }
 interface EmpState {
@@ -62,6 +72,7 @@ interface EmpState {
 interface User {
   id: number; name: string; username: string; avatar: string; role: string
   payType: 'day'|'hour'; payValue: number; hoursPerDay: number; discounts: Discount[]
+  companySlug?: string
 }
 
 function Input({ label, type='text', value, onChange, placeholder, error }: {
@@ -110,8 +121,255 @@ function calcNightMs(startMs: number, endMs: number) {
   return night
 }
 
-export default function PontoApp() {
+// ─── TELA DE SELEÇÃO DE EMPRESA ─────────────────────────────────────────────
+function CompanySelectScreen({ onSelect }: { onSelect: (slug: string) => void }) {
+  const [slugInput, setSlugInput] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const handleContinue = async () => {
+    const slug = slugInput.trim().toLowerCase()
+    if (!slug) { setError('Digite o código da empresa'); return }
+    setLoading(true); setError('')
+    try {
+      const snap = await getDocs(query(collection(db, 'companies'), where('slug', '==', slug)))
+      if (snap.empty) { setError('Empresa não encontrada. Verifique o código.'); setLoading(false); return }
+      onSelect(slug)
+    } catch {
+      setError('Erro ao conectar. Tente novamente.'); setLoading(false)
+    }
+  }
+
+  return (
+    <div style={{ minHeight:'100vh', background:'#0f172a', display:'flex', justifyContent:'center', fontFamily:"'Courier New',monospace" }}>
+      <div style={{ width:'100%', maxWidth:420, display:'flex', flexDirection:'column' }}>
+        <div style={{ height:3, background:'linear-gradient(90deg,#6366f1,#06b6d4,#22c55e)' }} />
+        <div style={{ flex:1, display:'flex', flexDirection:'column', justifyContent:'center', padding:'32px 24px' }}>
+          <div style={{ textAlign:'center', marginBottom:40 }}>
+            <div style={{ display:'inline-flex', alignItems:'center', justifyContent:'center', width:80, height:80, borderRadius:24, background:'linear-gradient(135deg,#6366f1,#06b6d4)', boxShadow:'0 0 40px #6366f140', marginBottom:20, fontSize:36 }}>⏱</div>
+            <div style={{ fontSize:28, fontWeight:900, color:'#f1f5f9' }}>PontoApp</div>
+            <div style={{ fontSize:12, color:'#475569', marginTop:6, letterSpacing:2, textTransform:'uppercase' }}>Controle de Ponto Digital</div>
+          </div>
+
+          <div style={{ background:'linear-gradient(160deg,#1e293b,#162032)', borderRadius:20, padding:'28px 24px', border:'1px solid #334155' }}>
+            <div style={{ fontSize:14, fontWeight:800, color:'#f1f5f9', marginBottom:6 }}>🏢 Identificar Empresa</div>
+            <div style={{ fontSize:12, color:'#64748b', marginBottom:20 }}>Digite o código da sua empresa para continuar.</div>
+            <Input
+              label="Código da Empresa"
+              value={slugInput}
+              onChange={setSlugInput}
+              placeholder="Ex: minhaempresa"
+              error={error}
+            />
+            <button
+              onClick={handleContinue}
+              disabled={loading}
+              style={{ width:'100%', padding:'14px', borderRadius:12, border:'none', cursor:loading?'wait':'pointer', background:loading?'#334155':'linear-gradient(135deg,#6366f1,#4f46e5)', color:loading?'#64748b':'#fff', fontSize:14, fontWeight:800, fontFamily:'inherit' }}>
+              {loading ? '🔍 Verificando...' : 'CONTINUAR →'}
+            </button>
+          </div>
+
+          <div style={{ textAlign:'center', marginTop:20 }}>
+            <button onClick={()=>onSelect('__superadmin__')} style={{ background:'none', border:'none', cursor:'pointer', fontSize:11, color:'#334155', fontFamily:'inherit' }}>
+              Acesso administrativo
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── TELA SUPER-ADMIN ────────────────────────────────────────────────────────
+function SuperAdminScreen({ onLogout }: { onLogout: () => void }) {
+  const [companies, setCompanies] = useState<CompanyMeta[]>([])
+  const [view, setView] = useState<'list'|'new'>('list')
+  const [form, setForm] = useState({ slug:'', name:'', adminUsername:'', adminPassword:'' })
+  const [formErrors, setFormErrors] = useState<Record<string,string>>({})
+  const [successMsg, setSuccessMsg] = useState('')
   const [now, setNow] = useState(new Date())
+
+  useEffect(() => { const t = setInterval(()=>setNow(new Date()),1000); return ()=>clearInterval(t) }, [])
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'companies'), snap => {
+      setCompanies(snap.docs.map(d => d.data() as CompanyMeta))
+    }); return () => unsub()
+  }, [])
+
+  const validateForm = () => {
+    const e: Record<string,string> = {}
+    if (!form.slug.trim()) e.slug = 'Código obrigatório'
+    else if (!/^[a-z0-9_-]+$/.test(form.slug.trim())) e.slug = 'Apenas letras minúsculas, números, - e _'
+    else if (companies.find(c => c.slug === form.slug.trim())) e.slug = 'Código já em uso'
+    if (!form.name.trim()) e.name = 'Nome obrigatório'
+    if (!form.adminUsername.trim()) e.adminUsername = 'Usuário obrigatório'
+    if (!form.adminPassword.trim()) e.adminPassword = 'Senha obrigatória'
+    return e
+  }
+
+  const saveCompany = async () => {
+    const e = validateForm(); if (Object.keys(e).length) { setFormErrors(e); return }
+    const slug = form.slug.trim().toLowerCase()
+    const meta: CompanyMeta = { slug, name:form.name.trim(), adminUsername:form.adminUsername.trim(), adminPassword:form.adminPassword, createdAt: new Date().toISOString() }
+    await setDoc(doc(db, 'companies', slug), meta)
+    // Também salvar config inicial da empresa
+    await setDoc(doc(db, `companies/${slug}/config`, 'company'), { name:form.name.trim(), cnpj:'', address:'', phone:'', email:'', logo:'' })
+    setSuccessMsg(`Empresa "${form.name}" criada!`)
+    setTimeout(() => setSuccessMsg(''), 4000)
+    setForm({ slug:'', name:'', adminUsername:'', adminPassword:'' }); setFormErrors({}); setView('list')
+  }
+
+  const deleteCompany = async (slug: string) => {
+    if (!window.confirm(`Excluir a empresa "${slug}"? Isso não remove os dados dos funcionários.`)) return
+    await deleteDoc(doc(db, 'companies', slug))
+  }
+
+  return (
+    <div style={{ minHeight:'100vh', background:'#0f172a', display:'flex', justifyContent:'center', fontFamily:"'Courier New',monospace" }}>
+      <div style={{ width:'100%', maxWidth:420, minHeight:'100vh', background:'#0f172a', display:'flex', flexDirection:'column' }}>
+        <div style={{ height:3, background:'linear-gradient(90deg,#f59e0b,#ef4444,#6366f1)' }} />
+
+        {/* Header */}
+        <div style={{ padding:'16px 20px 12px', borderBottom:'1px solid #1e293b', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+          <div>
+            <div style={{ fontSize:9, letterSpacing:4, color:'#f59e0b', textTransform:'uppercase' }}>Super Admin</div>
+            <div style={{ fontSize:18, fontWeight:900, color:'#f1f5f9' }}>🛡 PontoApp</div>
+          </div>
+          <div style={{ textAlign:'right', background:'#1e293b', borderRadius:12, padding:'8px 14px', border:'1px solid #334155' }}>
+            <div style={{ fontSize:16, fontWeight:700, color:'#f59e0b' }}>{formatTime(now)}</div>
+          </div>
+        </div>
+
+        <div style={{ flex:1, overflowY:'auto', padding:'16px 20px 24px' }}>
+          {successMsg && <div style={{ background:'#16a34a20', border:'1px solid #22c55e60', borderRadius:10, padding:'10px 14px', marginBottom:14, fontSize:12, color:'#22c55e', fontWeight:600 }}>✅ {successMsg}</div>}
+
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+            <div>
+              <div style={{ fontSize:10, letterSpacing:3, color:'#f59e0b', textTransform:'uppercase' }}>Empresas Cadastradas</div>
+              <div style={{ fontSize:12, color:'#64748b', marginTop:2 }}>{companies.length} empresa(s)</div>
+            </div>
+            <Btn small color="#f59e0b" onClick={()=>setView(view==='new'?'list':'new')}>
+              {view==='new' ? '← Voltar' : '+ Nova Empresa'}
+            </Btn>
+          </div>
+
+          {view==='new' && (
+            <div style={{ background:'#1e293b', borderRadius:16, padding:18, border:'1px solid #f59e0b30', marginBottom:16 }}>
+              <div style={{ fontSize:14, fontWeight:800, color:'#f1f5f9', marginBottom:16 }}>➕ Nova Empresa</div>
+              <Input label="Código (slug)" value={form.slug} onChange={v=>setForm(f=>({...f,slug:v.toLowerCase()}))} placeholder="Ex: mercearia-do-ze" error={formErrors.slug} />
+              <div style={{ fontSize:10, color:'#475569', marginTop:-10, marginBottom:14 }}>Funcionários usarão este código para acessar o app.</div>
+              <Input label="Nome da Empresa" value={form.name} onChange={v=>setForm(f=>({...f,name:v}))} placeholder="Ex: Mercearia do Zé LTDA" error={formErrors.name} />
+              <Input label="Usuário do Admin" value={form.adminUsername} onChange={v=>setForm(f=>({...f,adminUsername:v}))} placeholder="Ex: admin" error={formErrors.adminUsername} />
+              <Input label="Senha do Admin" type="password" value={form.adminPassword} onChange={v=>setForm(f=>({...f,adminPassword:v}))} placeholder="Senha de acesso do admin" error={formErrors.adminPassword} />
+              <Btn full color="#f59e0b" onClick={saveCompany}>✅ Criar Empresa</Btn>
+            </div>
+          )}
+
+          {view==='list' && (
+            <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+              {companies.length === 0 && (
+                <div style={{ textAlign:'center', padding:'50px 0', color:'#475569' }}>
+                  <div style={{ fontSize:36, marginBottom:10 }}>🏢</div>
+                  <div style={{ fontSize:13 }}>Nenhuma empresa cadastrada</div>
+                  <div style={{ fontSize:11, marginTop:6 }}>Clique em "+ Nova Empresa" para começar</div>
+                </div>
+              )}
+              {companies.map(c => (
+                <div key={c.slug} style={{ background:'#1e293b', borderRadius:14, padding:16, border:'1px solid #334155' }}>
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
+                    <div>
+                      <div style={{ fontSize:14, fontWeight:800, color:'#f1f5f9', marginBottom:4 }}>{c.name}</div>
+                      <div style={{ fontSize:11, color:'#f59e0b', background:'#f59e0b15', borderRadius:6, padding:'3px 8px', display:'inline-block', marginBottom:6 }}>/{c.slug}</div>
+                      <div style={{ fontSize:11, color:'#64748b' }}>Admin: <span style={{ color:'#94a3b8' }}>{c.adminUsername}</span></div>
+                      <div style={{ fontSize:10, color:'#475569', marginTop:2 }}>Criada em {new Date(c.createdAt).toLocaleDateString('pt-BR')}</div>
+                    </div>
+                    <Btn small outline color="#ef4444" onClick={()=>deleteCompany(c.slug)}>🗑</Btn>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div style={{ padding:'12px 20px', borderTop:'1px solid #1e293b', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+          <div style={{ fontSize:9, color:'#334155', letterSpacing:2, textTransform:'uppercase' }}>🛡 Super Administrador</div>
+          <button onClick={onLogout} style={{ background:'none', border:'none', cursor:'pointer', fontSize:11, color:'#ef4444', fontFamily:'inherit', fontWeight:700 }}>Sair →</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── APP PRINCIPAL (por empresa) ─────────────────────────────────────────────
+export default function PontoApp() {
+  const [companySlug, setCompanySlug] = useState<string|null>(null)
+  const [companyMeta, setCompanyMeta] = useState<CompanyMeta|null>(null)
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false)
+
+  // Se ainda não escolheu empresa, mostra tela de seleção
+  if (!companySlug) {
+    return <CompanySelectScreen onSelect={slug => {
+      if (slug === '__superadmin__') {
+        setIsSuperAdmin(true)
+        setCompanySlug('__superadmin__')
+      } else {
+        setCompanySlug(slug)
+      }
+    }} />
+  }
+
+  if (isSuperAdmin) {
+    return <SuperAdminLogin onSuccess={() => {}} onLogout={() => { setCompanySlug(null); setIsSuperAdmin(false) }} />
+  }
+
+  return <CompanyApp slug={companySlug} onLogout={() => { setCompanySlug(null); setCompanyMeta(null) }} />
+}
+
+// ─── LOGIN SUPER ADMIN ───────────────────────────────────────────────────────
+function SuperAdminLogin({ onSuccess, onLogout }: { onSuccess: ()=>void; onLogout: ()=>void }) {
+  const [user, setUser] = useState('')
+  const [pass, setPass] = useState('')
+  const [error, setError] = useState('')
+  const [authed, setAuthed] = useState(false)
+
+  const login = () => {
+    if (user === SUPER_ADMIN.username && pass === SUPER_ADMIN.password) { setAuthed(true); setError('') }
+    else setError('Credenciais incorretas.')
+  }
+
+  if (authed) return <SuperAdminScreen onLogout={onLogout} />
+
+  return (
+    <div style={{ minHeight:'100vh', background:'#0f172a', display:'flex', justifyContent:'center', fontFamily:"'Courier New',monospace" }}>
+      <div style={{ width:'100%', maxWidth:420, display:'flex', flexDirection:'column' }}>
+        <div style={{ height:3, background:'linear-gradient(90deg,#f59e0b,#ef4444,#6366f1)' }} />
+        <div style={{ flex:1, display:'flex', flexDirection:'column', justifyContent:'center', padding:'32px 24px' }}>
+          <div style={{ textAlign:'center', marginBottom:36 }}>
+            <div style={{ fontSize:48, marginBottom:12 }}>🛡</div>
+            <div style={{ fontSize:22, fontWeight:900, color:'#f1f5f9' }}>Acesso Restrito</div>
+            <div style={{ fontSize:12, color:'#475569', marginTop:6, letterSpacing:2, textTransform:'uppercase' }}>Super Administrador</div>
+          </div>
+          <div style={{ background:'linear-gradient(160deg,#1e293b,#162032)', borderRadius:20, padding:'28px 24px', border:'1px solid #f59e0b30' }}>
+            <Input label="Usuário" value={user} onChange={setUser} placeholder="superadmin" />
+            <Input label="Senha" type="password" value={pass} onChange={setPass} placeholder="••••••••" error={error} />
+            <button onClick={login} style={{ width:'100%', padding:'14px', borderRadius:12, border:'none', cursor:'pointer', background:'linear-gradient(135deg,#f59e0b,#d97706)', color:'#000', fontSize:14, fontWeight:800, fontFamily:'inherit', marginTop:8 }}>
+              ENTRAR →
+            </button>
+          </div>
+          <div style={{ textAlign:'center', marginTop:16 }}>
+            <button onClick={onLogout} style={{ background:'none', border:'none', cursor:'pointer', fontSize:11, color:'#475569', fontFamily:'inherit' }}>← Voltar</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── APP DA EMPRESA ──────────────────────────────────────────────────────────
+function CompanyApp({ slug, onLogout }: { slug: string; onLogout: ()=>void }) {
+  const [now, setNow] = useState(new Date())
+  const [companyMeta, setCompanyMeta] = useState<CompanyMeta|null>(null)
   const [loggedIn, setLoggedIn] = useState<User|null>(null)
   const [employees, setEmployees] = useState<Employee[]>([])
   const [records, setRecords] = useState<Record<number,EmpState>>({})
@@ -149,17 +407,29 @@ export default function PontoApp() {
   const [companyForm, setCompanyForm] = useState({ name:'', cnpj:'', address:'', phone:'', email:'', logo:'' })
   const [companySaved, setCompanySaved] = useState(false)
 
+  // Coleções isoladas por empresa: companies/{slug}/employees, companies/{slug}/records, etc.
+  const empCol = `companies/${slug}/employees`
+  const recCol = `companies/${slug}/records`
+  const cfgDoc = (id: string) => doc(db, `companies/${slug}/config`, id)
+
   useEffect(() => { const t = setInterval(()=>setNow(new Date()),1000); return ()=>clearInterval(t) }, [])
 
+  // Carregar meta da empresa
   useEffect(() => {
-    const unsub = onSnapshot(collection(db,'employees'), snap => {
+    const unsub = onSnapshot(doc(db, 'companies', slug), snap => {
+      if (snap.exists()) setCompanyMeta(snap.data() as CompanyMeta)
+    }); return ()=>unsub()
+  }, [slug])
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, empCol), snap => {
       setEmployees(snap.docs.map(d=>({...(d.data() as Employee)})))
       setLoading(false)
     }); return ()=>unsub()
-  }, [])
+  }, [slug])
 
   useEffect(() => {
-    const unsub = onSnapshot(collection(db,'records'), snap => {
+    const unsub = onSnapshot(collection(db, recCol), snap => {
       const recs: Record<number,EmpState> = {}
       snap.docs.forEach(d => {
         const data = d.data()
@@ -176,24 +446,24 @@ export default function PontoApp() {
       })
       setRecords(recs)
     }); return ()=>unsub()
-  }, [])
+  }, [slug])
 
   useEffect(() => {
-    const unsub = onSnapshot(doc(db,'config','geofence'), snap => {
+    const unsub = onSnapshot(cfgDoc('geofence'), snap => {
       if (snap.exists()) setGeofence(snap.data() as {lat:number;lng:number;radius:number;address:string})
       else setGeofence(null)
     }); return ()=>unsub()
-  }, [])
+  }, [slug])
 
   useEffect(() => {
-    const unsub = onSnapshot(doc(db,'config','company'), snap => {
+    const unsub = onSnapshot(cfgDoc('company'), snap => {
       if (snap.exists()) {
         const d = snap.data() as Company
         setCompany(d)
         setCompanyForm({ name:d.name||'', cnpj:d.cnpj||'', address:d.address||'', phone:d.phone||'', email:d.email||'', logo:d.logo||'' })
       }
     }); return ()=>unsub()
-  }, [])
+  }, [slug])
 
   const getState = (id:number): EmpState =>
     records[id] || { status:STATUS.OUT, log:[], workStart:null, breakStart:null, totalWork:0, totalBreak:0, days:[], dailyWork:{}, dailyOff:{}, dailyNight:{}, dailyOvertimeRate:{} }
@@ -220,7 +490,7 @@ export default function PontoApp() {
     if (!radius||radius<10||radius>5000) { setGeoError('Raio entre 10 e 5000m.'); setGeoLoading(false); return }
     const coords = await geocodeAddress(geoForm.address)
     if (!coords) { setGeoError('Endereço não encontrado.'); setGeoLoading(false); return }
-    await setDoc(doc(db,'config','geofence'), {...coords, radius, address:geoForm.address})
+    await setDoc(cfgDoc('geofence'), {...coords, radius, address:geoForm.address})
     setGeoSuccess(`Cerca ativa! Raio de ${radius}m.`); setGeoLoading(false)
     setTimeout(()=>setGeoSuccess(''),4000)
   }
@@ -253,7 +523,7 @@ export default function PontoApp() {
         s.totalBreak=(state.totalBreak||0)+(state.breakStart?ts.getTime()-state.breakStart.getTime():0)
         s.status=STATUS.IN; s.breakStart=null; s.workStart=ts
       }
-      await setDoc(doc(db,'records',String(id)), {
+      await setDoc(doc(db, recCol, String(id)), {
         ...s, log:s.log.map(e=>({type:e.type,time:e.time.toISOString()})),
         workStart:s.workStart?s.workStart.toISOString():null,
         breakStart:s.breakStart?s.breakStart.toISOString():null,
@@ -278,10 +548,8 @@ export default function PontoApp() {
     const daysWorked = Object.keys(state.dailyWork||{}).filter(d=>(state.dailyWork[d]||0)>0).length + (state.status!==STATUS.OUT?1:0)
     const paidOffDays = Object.values(state.dailyOff||{}).filter(v=>v==='paid').length
     const totalPaidDays = daysWorked + paidOffDays
-
     const hourValue = emp.payType==='hour' ? emp.payValue : emp.payValue/emp.hoursPerDay
     const journeyMs = emp.hoursPerDay * 3600000
-
     let regularMs = 0, overtimeByRate: Record<number,number> = {}
     const allDays = { ...(state.dailyWork||{}) }
     if (state.status!==STATUS.OUT) {
@@ -298,7 +566,6 @@ export default function PontoApp() {
       }
     })
     const overtimeMs = Object.values(overtimeByRate).reduce((a,b)=>a+b,0)
-
     let regularValue = 0, overtimeValue = 0
     if (emp.payType==='hour') {
       regularValue = (regularMs/3600000)*hourValue
@@ -308,17 +575,14 @@ export default function PontoApp() {
     Object.entries(overtimeByRate).forEach(([rate, ms]) => {
       overtimeValue += (ms as number)/3600000 * hourValue * (1+Number(rate)/100)
     })
-
     const nightMs = Object.values(state.dailyNight||{}).reduce((a:number,b)=>a+(b as number),0)
     const nightBonus = (nightMs/3600000)*hourValue*0.20
     const grossValue = regularValue + overtimeValue + nightBonus
-
     const autoDeductions = 0
     const manualDiscountTotal = (emp.discounts||[]).reduce((s,d)=>s+d.value,0)
     const totalDeductions = autoDeductions + manualDiscountTotal
     const gratificationsTotal = (emp.gratifications||[]).reduce((s,g)=>s+g.value,0)
     const net = Math.max(0, grossValue-totalDeductions) + gratificationsTotal
-
     return { totalMs, daysWorked, grossValue, autoDeductions, manualDiscountTotal, totalDeductions, net, breakMs:totalBreakMs, overtimeMs, overtimeByRate, nightMs, nightBonus, gratificationsTotal, regularValue, overtimeValue }
   }
 
@@ -341,14 +605,15 @@ export default function PontoApp() {
       payType:form.payType as 'day'|'hour', payValue:Number(form.payValue),
       hoursPerDay:Number(form.hoursPerDay)||8, overtimeRate:Number(form.overtimeRate) as 50|70|100,
       cpf:form.cpf||'', admission:form.admission||'', fgts:form.fgts||false,
+      companySlug: slug,
       ...(form.password?{password:form.password}:{})
     }
     if (editingEmp) {
-      await setDoc(doc(db,'employees',String(editingEmp.id)), {...editingEmp,...data})
+      await setDoc(doc(db, empCol, String(editingEmp.id)), {...editingEmp,...data})
       setSuccessMsg('Funcionário atualizado!')
     } else {
       const id = Date.now()
-      await setDoc(doc(db,'employees',String(id)), {id, password:form.password, discounts:[], gratifications:[], ...data})
+      await setDoc(doc(db, empCol, String(id)), {id, password:form.password, discounts:[], gratifications:[], ...data})
       setSuccessMsg('Funcionário cadastrado!')
     }
     setTimeout(()=>setSuccessMsg(''),3000)
@@ -357,8 +622,8 @@ export default function PontoApp() {
   }
 
   const deleteEmployee = async (id:number) => {
-    await deleteDoc(doc(db,'employees',String(id)))
-    await deleteDoc(doc(db,'records',String(id)))
+    await deleteDoc(doc(db, empCol, String(id)))
+    await deleteDoc(doc(db, recCol, String(id)))
   }
 
   const startEdit = (emp:Employee) => {
@@ -373,13 +638,13 @@ export default function PontoApp() {
     if (!discountForm.reason.trim()) { setDiscountError('Informe o motivo'); return }
     const emp = employees.find(e=>e.id===empId); if (!emp) return
     const d: Discount = { id:Date.now(), value:Number(discountForm.value), reason:discountForm.reason.trim(), date:formatDateShort(new Date()) }
-    await setDoc(doc(db,'employees',String(empId)), {...emp, discounts:[...(emp.discounts||[]),d]})
+    await setDoc(doc(db, empCol, String(empId)), {...emp, discounts:[...(emp.discounts||[]),d]})
     setDiscountForm({ value:'', reason:'' }); setDiscountTarget(null)
   }
 
   const removeDiscount = async (empId:number, discountId:number) => {
     const emp = employees.find(e=>e.id===empId); if (!emp) return
-    await setDoc(doc(db,'employees',String(empId)), {...emp, discounts:emp.discounts.filter(d=>d.id!==discountId)})
+    await setDoc(doc(db, empCol, String(empId)), {...emp, discounts:emp.discounts.filter(d=>d.id!==discountId)})
   }
 
   const addGratification = async (empId:number) => {
@@ -388,20 +653,20 @@ export default function PontoApp() {
     if (!gratifForm.reason.trim()) { setGratifError('Informe o motivo'); return }
     const emp = employees.find(e=>e.id===empId); if (!emp) return
     const g: Discount = { id:Date.now(), value:Number(gratifForm.value), reason:gratifForm.reason.trim(), date:formatDateShort(new Date()) }
-    await setDoc(doc(db,'employees',String(empId)), {...emp, gratifications:[...(emp.gratifications||[]),g]})
+    await setDoc(doc(db, empCol, String(empId)), {...emp, gratifications:[...(emp.gratifications||[]),g]})
     setGratifForm({ value:'', reason:'' }); setGratifTarget(null); setIsAddingGratif(false)
   }
 
   const removeGratification = async (empId:number, gratifId:number) => {
     const emp = employees.find(e=>e.id===empId); if (!emp) return
-    await setDoc(doc(db,'employees',String(empId)), {...emp, gratifications:(emp.gratifications||[]).filter(g=>g.id!==gratifId)})
+    await setDoc(doc(db, empCol, String(empId)), {...emp, gratifications:(emp.gratifications||[]).filter(g=>g.id!==gratifId)})
   }
 
   const markDayOff = async (empId:number, date:string, type:'paid'|'unpaid'|null) => {
     const state = getState(empId)
     const dailyOff = {...(state.dailyOff||{})}
     if (type===null) delete dailyOff[date]; else dailyOff[date]=type
-    await setDoc(doc(db,'records',String(empId)), {
+    await setDoc(doc(db, recCol, String(empId)), {
       ...state, dailyOff,
       log:state.log.map(e=>({type:e.type,time:e.time.toISOString()})),
       workStart:state.workStart?state.workStart.toISOString():null,
@@ -421,7 +686,7 @@ export default function PontoApp() {
     if (ms===0) newDays=newDays.filter(d=>d!==date)
     const newOvertimeRate = {...(state.dailyOvertimeRate||{})}
     if (otRate!==undefined) newOvertimeRate[date]=otRate
-    await setDoc(doc(db,'records',String(empId)), {
+    await setDoc(doc(db, recCol, String(empId)), {
       ...state, dailyWork:newDailyWork, totalWork:newTotalWork, days:newDays, dailyOvertimeRate:newOvertimeRate,
       log:state.log.map(e=>({type:e.type,time:e.time.toISOString()})),
       workStart:state.workStart?state.workStart.toISOString():null,
@@ -440,30 +705,26 @@ export default function PontoApp() {
       })
     }
     const { jsPDF } = (window as any).jspdf
-    const doc = new jsPDF({ orientation:'portrait', unit:'mm', format:'a4' })
+    const jdoc = new jsPDF({ orientation:'portrait', unit:'mm', format:'a4' })
     const W=210, margin=16
     let y=0
     const col2 = W/2+2, rowH=7
-
     const rect = (x:number,yy:number,w:number,h:number,fill?:string) => {
-      if (fill) { doc.setFillColor(fill); doc.rect(x,yy,w,h,'F') }
+      if (fill) { jdoc.setFillColor(fill); jdoc.rect(x,yy,w,h,'F') }
     }
     const txt = (t:string,x:number,yy:number,opts?:{size?:number;bold?:boolean;color?:string;align?:'left'|'right'|'center'}) => {
-      doc.setFontSize(opts?.size||9)
-      doc.setFont('helvetica',opts?.bold?'bold':'normal')
-      if (opts?.color) { const [r,g,b]=opts.color.match(/\w\w/g)!.map(h=>parseInt(h,16)); doc.setTextColor(r,g,b) } else doc.setTextColor(30,30,30)
-      doc.text(t,x,yy,{align:opts?.align||'left'})
+      jdoc.setFontSize(opts?.size||9)
+      jdoc.setFont('helvetica',opts?.bold?'bold':'normal')
+      if (opts?.color) { const [r,g,b]=opts.color.match(/\w\w/g)!.map(h=>parseInt(h,16)); jdoc.setTextColor(r,g,b) } else jdoc.setTextColor(30,30,30)
+      jdoc.text(t,x,yy,{align:opts?.align||'left'})
     }
     const ln = (x1:number,yy:number,x2:number,color='#e2e8f0') => {
       const [r,g,b]=color.match(/\w\w/g)!.map(h=>parseInt(h,16))
-      doc.setDrawColor(r,g,b); doc.setLineWidth(0.3); doc.line(x1,yy,x2,yy)
+      jdoc.setDrawColor(r,g,b); jdoc.setLineWidth(0.3); jdoc.line(x1,yy,x2,yy)
     }
-
-    // Header
-    rect(0,0,W,36,'#1e293b')
-    y=10
+    rect(0,0,W,36,'#1e293b'); y=10
     if (company?.logo) {
-      try { doc.addImage(company.logo,'AUTO',margin,4,28,28,'','FAST') } catch(_) {}
+      try { jdoc.addImage(company.logo,'AUTO',margin,4,28,28,'','FAST') } catch(_) {}
       const tx=margin+32
       txt(company?.name||'PontoApp',tx,y+2,{size:14,bold:true,color:'#f1f5f9'})
       if (company?.cnpj) txt(`CNPJ: ${company.cnpj}`,tx,y+8,{size:8,color:'#94a3b8'})
@@ -478,8 +739,6 @@ export default function PontoApp() {
     txt(new Date().toLocaleDateString('pt-BR',{month:'long',year:'numeric'}),W-margin,y+9,{size:8,color:'#94a3b8',align:'right'})
     txt(`Gerado: ${new Date().toLocaleString('pt-BR')}`,W-margin,y+15,{size:7,color:'#64748b',align:'right'})
     y=42
-
-    // Employee data
     rect(margin,y,W-margin*2,6,'#f8fafc')
     txt('DADOS DO FUNCIONÁRIO',margin+2,y+4.5,{size:8,bold:true,color:'#475569'})
     y+=8
@@ -495,8 +754,6 @@ export default function PontoApp() {
       ln(margin,y+rowH,W-margin); y+=rowH
     })
     y+=6
-
-    // Earnings
     rect(margin,y,W-margin*2,6,'#f0fdf4')
     txt('PROVENTOS',margin+2,y+4.5,{size:8,bold:true,color:'#16a34a'})
     y+=8
@@ -519,8 +776,6 @@ export default function PontoApp() {
     txt('TOTAL PROVENTOS',margin+2,y+5,{size:8.5,bold:true,color:'#15803d'})
     txt(fmt(payment.grossValue),W-margin-2,y+5,{size:9,bold:true,color:'#15803d',align:'right'})
     y+=10
-
-    // Deductions
     rect(margin,y,W-margin*2,6,'#fef2f2')
     txt('DESCONTOS',margin+2,y+4.5,{size:8,bold:true,color:'#dc2626'})
     y+=8
@@ -541,22 +796,16 @@ export default function PontoApp() {
     txt('TOTAL DESCONTOS',margin+2,y+5,{size:8.5,bold:true,color:'#dc2626'})
     txt(`- ${fmt(payment.totalDeductions+fgtsVal)}`,W-margin-2,y+5,{size:9,bold:true,color:'#dc2626',align:'right'})
     y+=12
-
-    // Net
     rect(margin,y,W-margin*2,12,'#1e293b')
     txt('VALOR LÍQUIDO A RECEBER',margin+4,y+8,{size:10,bold:true,color:'#f1f5f9'})
     txt(fmt(payment.net-fgtsVal),W-margin-4,y+8,{size:13,bold:true,color:'#4ade80',align:'right'})
     y+=16
-
-    // Signatures
     ln(margin,y+14,margin+70); ln(W-margin-70,y+14,W-margin)
     txt('Assinatura do Empregador',margin+35,y+18,{size:7,color:'#94a3b8',align:'center'})
     txt('Assinatura do Funcionário',W-margin-35,y+18,{size:7,color:'#94a3b8',align:'center'})
-    y+=24
-    ln(margin,y,W-margin)
+    y+=24; ln(margin,y,W-margin)
     txt('Documento gerado automaticamente pelo PontoApp.',W/2,y+4,{size:6.5,color:'#94a3b8',align:'center'})
-
-    doc.save(`Holerite_${emp.name.replace(/\s+/g,'_')}_${new Date().toLocaleDateString('pt-BR').replace(/\//g,'-')}.pdf`)
+    jdoc.save(`Holerite_${emp.name.replace(/\s+/g,'_')}_${new Date().toLocaleDateString('pt-BR').replace(/\//g,'-')}.pdf`)
   }
 
   // Live values
@@ -570,14 +819,16 @@ export default function PontoApp() {
 
   const handleLogin = () => {
     setLoginError('')
-    if (loginUser===ADMIN_CRED.username&&loginPass===ADMIN_CRED.password) {
-      setLoggedIn({id:0,name:'Administrador',username:'admin',avatar:'AD',role:'admin',payType:'day',payValue:0,hoursPerDay:8,discounts:[]})
+    // Admin da empresa (credenciais vindas do Firestore)
+    if (companyMeta && loginUser===companyMeta.adminUsername && loginPass===companyMeta.adminPassword) {
+      setLoggedIn({id:0,name:'Administrador',username:companyMeta.adminUsername,avatar:'AD',role:'admin',payType:'day',payValue:0,hoursPerDay:8,discounts:[],companySlug:slug})
       setView('list'); return
     }
     const emp = employees.find(e=>e.username===loginUser&&e.password===loginPass)
     if (emp) { setLoggedIn({...emp,role:'employee'}); setView('clock'); return }
     setLoginError('Usuário ou senha incorretos.')
   }
+
   const handleLogout = () => { setLoggedIn(null); setLoginUser(''); setLoginPass(''); setLoginError('') }
 
   if (loading) return (
@@ -597,7 +848,13 @@ export default function PontoApp() {
         {/* Header */}
         <div style={{ padding:'16px 20px 12px', borderBottom:'1px solid #1e293b', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
           <div>
-            <div style={{ fontSize:9, letterSpacing:4, color:'#475569', textTransform:'uppercase' }}>Sistema de Ponto</div>
+            {/* Botão voltar para trocar de empresa */}
+            {!loggedIn && (
+              <button onClick={onLogout} style={{ background:'none', border:'none', cursor:'pointer', fontSize:10, color:'#475569', fontFamily:'inherit', marginBottom:2, padding:0 }}>← trocar empresa</button>
+            )}
+            <div style={{ fontSize:9, letterSpacing:4, color:'#475569', textTransform:'uppercase' }}>
+              {companyMeta?.name || slug}
+            </div>
             <div style={{ fontSize:20, fontWeight:900, color:'#f1f5f9' }}>⏱ PontoApp</div>
           </div>
           <div style={{ textAlign:'right', background:'#1e293b', borderRadius:12, padding:'8px 14px', border:'1px solid #334155' }}>
@@ -610,10 +867,14 @@ export default function PontoApp() {
 
           {/* LOGIN */}
           {!loggedIn && (
-            <div style={{ display:'flex', flexDirection:'column', minHeight:'calc(100vh - 120px)', justifyContent:'center' }}>
+            <div style={{ display:'flex', flexDirection:'column', minHeight:'calc(100vh - 140px)', justifyContent:'center' }}>
               <div style={{ textAlign:'center', marginBottom:36 }}>
-                <div style={{ display:'inline-flex', alignItems:'center', justifyContent:'center', width:72, height:72, borderRadius:20, background:'linear-gradient(135deg,#6366f1,#06b6d4)', boxShadow:'0 0 40px #6366f140', marginBottom:20, fontSize:32 }}>⏱</div>
-                <div style={{ fontSize:26, fontWeight:900, color:'#f1f5f9' }}>PontoApp</div>
+                {company?.logo ? (
+                  <img src={company.logo} alt="Logo" style={{ maxHeight:72, maxWidth:200, borderRadius:12, objectFit:'contain', marginBottom:16 }} />
+                ) : (
+                  <div style={{ display:'inline-flex', alignItems:'center', justifyContent:'center', width:72, height:72, borderRadius:20, background:'linear-gradient(135deg,#6366f1,#06b6d4)', boxShadow:'0 0 40px #6366f140', marginBottom:20, fontSize:32 }}>⏱</div>
+                )}
+                <div style={{ fontSize:26, fontWeight:900, color:'#f1f5f9' }}>{company?.name || companyMeta?.name || 'PontoApp'}</div>
                 <div style={{ fontSize:12, color:'#475569', marginTop:6, letterSpacing:2, textTransform:'uppercase' }}>Controle de Ponto Digital</div>
               </div>
               <div style={{ background:'linear-gradient(160deg,#1e293b,#162032)', borderRadius:20, padding:'28px 24px', border:'1px solid #334155', marginBottom:16 }}>
@@ -788,7 +1049,6 @@ export default function PontoApp() {
               {view==='list' && (
                 <>
                   {successMsg && <div style={{ background:'#16a34a20', border:'1px solid #22c55e60', borderRadius:10, padding:'10px 14px', marginBottom:14, fontSize:12, color:'#22c55e', fontWeight:600 }}>✅ {successMsg}</div>}
-
                   {adminView==='list' && (
                     <>
                       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14 }}>
@@ -896,7 +1156,6 @@ export default function PontoApp() {
                     </div>
                     <div style={{ fontSize:11, color:'#16a34a', marginTop:4 }}>{employees.length} funcionário(s)</div>
                   </div>
-
                   {employees.map(emp=>{
                     const st=getState(emp.id)
                     const tw=(st.totalWork||0)+(st.workStart?now.getTime()-st.workStart.getTime():0)
@@ -904,7 +1163,6 @@ export default function PontoApp() {
                     const isOpen=expandedReport===emp.id
                     const isAddingDiscount=discountTarget===emp.id
                     const isAddingGratifHere=gratifTarget===emp.id&&isAddingGratif
-
                     return (
                       <div key={emp.id} style={{ background:'#1e293b', borderRadius:14, padding:16, marginBottom:12, border:'1px solid #334155' }}>
                         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:isOpen?14:0 }}>
@@ -922,7 +1180,6 @@ export default function PontoApp() {
                             </button>
                           </div>
                         </div>
-
                         {isOpen && (
                           <div>
                             <div style={{ display:'flex', flexDirection:'column', gap:6, marginBottom:14 }}>
@@ -939,7 +1196,6 @@ export default function PontoApp() {
                                 </div>
                               ))}
                             </div>
-
                             {/* Descontos */}
                             <div style={{ background:'#0f172a', borderRadius:12, padding:12, marginBottom:12, border:'1px solid #ef444425' }}>
                               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
@@ -965,7 +1221,7 @@ export default function PontoApp() {
                                   <Btn full onClick={()=>addDiscount(emp.id)} color="#ef4444">✅ Confirmar</Btn>
                                 </div>
                               )}
-                              {(emp.discounts||[]).length===0 && !isAddingDiscount && <div style={{ fontSize:12, color:'#475569', textAlign:'center', padding:'8px 0' }}>Nenhum desconto ainda</div>}
+                              {(emp.discounts||[]).length===0&&!isAddingDiscount&&<div style={{ fontSize:12, color:'#475569', textAlign:'center', padding:'8px 0' }}>Nenhum desconto ainda</div>}
                               {(emp.discounts||[]).map(d=>(
                                 <div key={d.id} style={{ background:'#1e293b', borderRadius:8, padding:'10px 12px', marginBottom:6, borderLeft:'3px solid #ef4444' }}>
                                   <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:8 }}>
@@ -980,14 +1236,7 @@ export default function PontoApp() {
                                   </div>
                                 </div>
                               ))}
-                              {(emp.discounts||[]).length>0 && (
-                                <div style={{ marginTop:8, paddingTop:8, borderTop:'1px solid #334155', display:'flex', justifyContent:'space-between' }}>
-                                  <span style={{ fontSize:12, color:'#94a3b8', fontWeight:600 }}>Total Descontos</span>
-                                  <span style={{ fontSize:13, fontWeight:800, color:'#ef4444' }}>- {fmt(pay.totalDeductions)}</span>
-                                </div>
-                              )}
                             </div>
-
                             {/* Gratificações */}
                             <div style={{ background:'#0f172a', borderRadius:12, padding:12, marginBottom:12, border:'1px solid #22c55e25' }}>
                               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
@@ -1013,38 +1262,25 @@ export default function PontoApp() {
                                   <Btn full onClick={()=>addGratification(emp.id)} color="#22c55e">✅ Confirmar</Btn>
                                 </div>
                               )}
-                              {(emp.gratifications||[]).length===0&&!isAddingGratifHere && <div style={{ fontSize:12, color:'#475569', textAlign:'center', padding:'6px 0' }}>Nenhuma gratificação</div>}
+                              {(emp.gratifications||[]).length===0&&!isAddingGratifHere&&<div style={{ fontSize:12, color:'#475569', textAlign:'center', padding:'8px 0' }}>Nenhuma gratificação</div>}
                               {(emp.gratifications||[]).map(g=>(
                                 <div key={g.id} style={{ background:'#1e293b', borderRadius:8, padding:'10px 12px', marginBottom:6, borderLeft:'3px solid #22c55e' }}>
-                                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-                                    <div>
+                                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:8 }}>
+                                    <div style={{ flex:1 }}>
                                       <div style={{ fontSize:12, fontWeight:700, color:'#86efac' }}>{g.reason}</div>
-                                      <div style={{ fontSize:10, color:'#64748b', marginTop:2 }}>{g.date}</div>
+                                      <div style={{ fontSize:10, color:'#64748b', marginTop:2 }}>Lançado em {g.date}</div>
                                     </div>
-                                    <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-                                      <span style={{ fontSize:13, fontWeight:800, color:'#22c55e' }}>+ {fmt(g.value)}</span>
-                                      <button onClick={()=>removeGratification(emp.id,g.id)} style={{ background:'#ef444420', border:'1px solid #ef444440', borderRadius:6, padding:'3px 7px', cursor:'pointer', color:'#ef4444', fontSize:10, fontFamily:'inherit' }}>🗑</button>
+                                    <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                                      <div style={{ fontSize:13, fontWeight:800, color:'#22c55e' }}>+ {fmt(g.value)}</div>
+                                      <button onClick={()=>removeGratification(emp.id,g.id)} style={{ background:'#22c55e20', border:'1px solid #22c55e40', borderRadius:6, padding:'3px 8px', cursor:'pointer', fontSize:10, color:'#22c55e', fontFamily:'inherit' }}>🗑</button>
                                     </div>
                                   </div>
                                 </div>
                               ))}
-                              {(emp.gratifications||[]).length>0 && (
-                                <div style={{ marginTop:8, paddingTop:8, borderTop:'1px solid #334155', display:'flex', justifyContent:'space-between' }}>
-                                  <span style={{ fontSize:12, color:'#94a3b8', fontWeight:600 }}>Total Gratificações</span>
-                                  <span style={{ fontSize:13, fontWeight:800, color:'#22c55e' }}>+ {fmt(pay.gratificationsTotal)}</span>
-                                </div>
-                              )}
                             </div>
-
-                            <div style={{ background:'#22c55e20', border:'1px solid #22c55e40', borderRadius:10, padding:'12px 14px', display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
-                              <span style={{ fontSize:13, fontWeight:700, color:'#4ade80' }}>✅ Total Líquido</span>
-                              <span style={{ fontSize:18, fontWeight:900, color:'#22c55e' }}>{fmt(pay.net)}</span>
+                            <div style={{ display:'flex', gap:8 }}>
+                              <Btn full color="#6366f1" onClick={()=>generateHolerite(emp,getState(emp.id),pay)}>📄 Holerite PDF</Btn>
                             </div>
-
-                            <button onClick={()=>generateHolerite(emp,st,pay)}
-                              style={{ width:'100%', padding:'12px', borderRadius:12, border:'1.5px solid #6366f160', cursor:'pointer', background:'linear-gradient(135deg,#6366f115,#06b6d415)', color:'#a5b4fc', fontSize:12, fontWeight:800, fontFamily:'inherit', display:'flex', alignItems:'center', justifyContent:'center', gap:8 }}>
-                              📄 Baixar Holerite PDF
-                            </button>
                           </div>
                         )}
                       </div>
@@ -1056,157 +1292,92 @@ export default function PontoApp() {
               {/* MAPA MENSAL */}
               {view==='monthly' && (
                 <div>
-                  <div style={{ fontSize:10, letterSpacing:3, color:'#475569', textTransform:'uppercase', marginBottom:14 }}>📅 Mapa Mensal de Horas</div>
-
-                  <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:16, background:'#1e293b', borderRadius:12, padding:'10px 14px', border:'1px solid #334155' }}>
-                    <button onClick={()=>{ const [y,m]=mapMonth.split('-').map(Number); const d=new Date(y,m-2,1); setMapMonth(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`) }}
-                      style={{ background:'#0f172a', border:'1px solid #334155', borderRadius:8, padding:'6px 12px', cursor:'pointer', color:'#94a3b8', fontSize:14, fontFamily:'inherit' }}>◀</button>
-                    <div style={{ flex:1, textAlign:'center', fontSize:13, fontWeight:700, color:'#f1f5f9' }}>
-                      {new Date(mapMonth+'-01').toLocaleDateString('pt-BR',{month:'long',year:'numeric'}).replace(/^\w/,c=>c.toUpperCase())}
-                    </div>
-                    <button onClick={()=>{ const [y,m]=mapMonth.split('-').map(Number); const d=new Date(y,m,1); setMapMonth(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`) }}
-                      style={{ background:'#0f172a', border:'1px solid #334155', borderRadius:8, padding:'6px 12px', cursor:'pointer', color:'#94a3b8', fontSize:14, fontFamily:'inherit' }}>▶</button>
+                  <div style={{ fontSize:10, letterSpacing:3, color:'#475569', textTransform:'uppercase', marginBottom:14 }}>📅 Mapa de Horas</div>
+                  <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:16 }}>
+                    <input type="month" value={mapMonth} onChange={e=>setMapMonth(e.target.value)}
+                      style={{ flex:1, background:'#1e293b', border:'1px solid #334155', borderRadius:10, padding:'10px 12px', color:'#f1f5f9', fontSize:13, fontFamily:'inherit', outline:'none' }} />
+                    <select value={mapTarget??''} onChange={e=>setMapTarget(e.target.value?Number(e.target.value):null)}
+                      style={{ flex:1, background:'#1e293b', border:'1px solid #334155', borderRadius:10, padding:'10px 12px', color:'#f1f5f9', fontSize:13, fontFamily:'inherit', outline:'none' }}>
+                      <option value="">Todos</option>
+                      {employees.map(e=><option key={e.id} value={e.id}>{e.name}</option>)}
+                    </select>
                   </div>
-
-                  <div style={{ display:'flex', flexDirection:'column', gap:8, marginBottom:16 }}>
-                    {employees.map(emp=>(
-                      <button key={emp.id} onClick={()=>setMapTarget(mapTarget===emp.id?null:emp.id)}
-                        style={{ background:mapTarget===emp.id?'#6366f120':'#1e293b', border:`1px solid ${mapTarget===emp.id?'#6366f160':'#334155'}`, borderRadius:12, padding:'12px 14px', cursor:'pointer', display:'flex', justifyContent:'space-between', alignItems:'center', fontFamily:'inherit' }}>
-                        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-                          <div style={{ width:34, height:34, borderRadius:'50%', background:'#6366f1', display:'flex', alignItems:'center', justifyContent:'center', fontSize:11, fontWeight:800, color:'#fff' }}>{emp.avatar}</div>
-                          <div style={{ textAlign:'left' }}>
-                            <div style={{ fontSize:13, fontWeight:700, color:'#f1f5f9' }}>{emp.name}</div>
-                            <div style={{ fontSize:10, color:'#64748b' }}>{emp.role}</div>
-                          </div>
-                        </div>
-                        <div style={{ fontSize:11, color:'#6366f1', fontWeight:700 }}>{mapTarget===emp.id?'fechar ▲':'ver mapa ▼'}</div>
-                      </button>
-                    ))}
-                  </div>
-
-                  {mapTarget!==null && (()=>{
-                    const emp=employees.find(e=>e.id===mapTarget)
-                    if (!emp) return null
-                    const st=getState(emp.id)
-                    const [y,m]=mapMonth.split('-').map(Number)
-                    const days=getDaysInMonth(y,m-1)
-                    const dailyWork=st.dailyWork||{}
-                    const dailyOff=st.dailyOff||{}
-                    const monthTotal=days.reduce((sum,d)=>sum+(dailyWork[d]||0),0)
-
+                  {(mapTarget?employees.filter(e=>e.id===mapTarget):employees).map(emp=>{
+                    const state=getState(emp.id)
+                    const [year,month]=mapMonth.split('-').map(Number)
+                    const days=getDaysInMonth(year,month-1)
+                    const monthTotal=days.reduce((s,d)=>s+(state.dailyWork[d]||0),0)
                     return (
-                      <div style={{ background:'#1e293b', borderRadius:14, padding:16, border:'1px solid #334155', marginBottom:16 }}>
-                        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14 }}>
-                          <div style={{ fontSize:13, fontWeight:800, color:'#f1f5f9' }}>{emp.name}</div>
-                          <div style={{ fontSize:12, fontWeight:700, color:'#22c55e' }}>Total: {msToHHMM(monthTotal)}</div>
-                        </div>
-                        <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
-                          {days.map(date=>{
-                            const ms=dailyWork[date]||0
-                            const offType=dailyOff[date]
-                            const [,, d]=date.split('-')
-                            const weekday=new Date(date+'T12:00:00').toLocaleDateString('pt-BR',{weekday:'short'})
-                            const isToday=date===todayStr
-                            const isEditing=editingDay?.empId===emp.id&&editingDay?.date===date
-                            const isWeekend=new Date(date+'T12:00:00').getDay()===0||new Date(date+'T12:00:00').getDay()===6
-                            const otRate=(st.dailyOvertimeRate||{})[date]??(emp.overtimeRate||50)
-
-                            return (
-                              <div key={date}>
-                                <div style={{ display:'flex', alignItems:'center', gap:8, padding:'8px 10px', background:isToday?'#6366f115':'#0f172a', borderRadius:8, border:isToday?'1px solid #6366f140':'1px solid transparent' }}>
-                                  <div style={{ width:28, textAlign:'center' }}>
-                                    <div style={{ fontSize:13, fontWeight:700, color:isToday?'#a5b4fc':isWeekend?'#475569':'#94a3b8' }}>{d}</div>
-                                    <div style={{ fontSize:9, color:'#475569', textTransform:'uppercase' }}>{weekday}</div>
-                                  </div>
-                                  <div style={{ flex:1 }}>
-                                    {offType==='paid' ? (
-                                      <div style={{ fontSize:11, color:'#a78bfa', fontWeight:700 }}>🌴 Folga Remunerada</div>
-                                    ) : offType==='unpaid' ? (
-                                      <div style={{ fontSize:11, color:'#64748b', fontWeight:700 }}>⚫ Folga Não Remunerada</div>
-                                    ) : ms>0 ? (
-                                      <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-                                        <div style={{ flex:1, height:6, background:'#1e293b', borderRadius:3, overflow:'hidden' }}>
-                                          <div style={{ height:'100%', background:'#22c55e', borderRadius:3, width:`${Math.min(100,(ms/(emp.hoursPerDay*3600000))*100)}%` }} />
-                                        </div>
-                                        <span style={{ fontSize:12, fontWeight:700, color:'#22c55e', minWidth:42 }}>{msToHHMM(ms)}</span>
-                                      </div>
-                                    ) : (
-                                      <div style={{ fontSize:11, color:isWeekend?'#334155':'#475569' }}>{isWeekend?'—':'Sem registro'}</div>
-                                    )}
-                                  </div>
-                                  <button onClick={()=>{
-                                    if(isEditing){setEditingDay(null);return}
-                                    setEditingDay({empId:emp.id,date})
-                                    const h=Math.floor(ms/3600000), min=Math.floor((ms%3600000)/60000)
-                                    setEditHours(String(h)); setEditMinutes(String(min))
-                                  }} style={{ background:'#1e293b', border:'1px solid #334155', borderRadius:6, padding:'4px 8px', cursor:'pointer', color:'#64748b', fontSize:10, fontFamily:'inherit' }}>
+                      <div key={emp.id} style={{ background:'#1e293b', borderRadius:14, padding:14, marginBottom:14, border:'1px solid #334155' }}>
+                        <div style={{ fontSize:13, fontWeight:800, color:'#f1f5f9', marginBottom:12 }}>{emp.name}</div>
+                        {days.map(date=>{
+                          const ms=state.dailyWork[date]||0
+                          const off=state.dailyOff?.[date]
+                          const isToday=date===TODAY()
+                          const [y,mo,d]=date.split('-')
+                          const dow=new Date(date+'T12:00:00').toLocaleDateString('pt-BR',{weekday:'short'})
+                          const isEditing=editingDay?.empId===emp.id&&editingDay?.date===date
+                          return (
+                            <div key={date} style={{ display:'flex', flexDirection:'column', gap:0 }}>
+                              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'8px 10px', background:isToday?'#6366f115':'#0f172a', borderRadius:8, marginBottom:4, border:isToday?'1px solid #6366f140':'1px solid transparent' }}>
+                                <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                                  <span style={{ fontSize:11, color:'#64748b', width:24 }}>{dow}</span>
+                                  <span style={{ fontSize:12, color:'#94a3b8' }}>{d}/{mo}</span>
+                                  {off && <span style={{ fontSize:9, padding:'2px 6px', borderRadius:4, background:off==='paid'?'#22c55e20':'#f59e0b20', color:off==='paid'?'#22c55e':'#f59e0b', fontWeight:700 }}>{off==='paid'?'Folga Paga':'Folga'}</span>}
+                                </div>
+                                <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                                  <span style={{ fontSize:12, fontWeight:700, color:ms>0?'#22c55e':'#334155' }}>{ms>0?msToHHMM(ms):off?'—':'0h00'}</span>
+                                  <button onClick={()=>{setEditingDay(isEditing?null:{empId:emp.id,date});if(!isEditing){const h=Math.floor(ms/3600000);const m=Math.floor((ms%3600000)/60000);setEditHours(String(h));setEditMinutes(String(m))}}}
+                                    style={{ background:'#334155', border:'none', borderRadius:6, padding:'3px 8px', cursor:'pointer', fontSize:10, color:'#94a3b8', fontFamily:'inherit' }}>
                                     {isEditing?'✕':'✏️'}
                                   </button>
+                                  <select value={off||''} onChange={e=>markDayOff(emp.id,date,(e.target.value as 'paid'|'unpaid'|null)||null)}
+                                    style={{ background:'#1e293b', border:'1px solid #334155', borderRadius:6, padding:'3px 6px', color:'#94a3b8', fontSize:10, fontFamily:'inherit', cursor:'pointer' }}>
+                                    <option value="">—</option>
+                                    <option value="paid">Folga Paga</option>
+                                    <option value="unpaid">Folga</option>
+                                  </select>
                                 </div>
-
-                                {isEditing && (
-                                  <div style={{ background:'#0f172a', borderRadius:8, padding:12, margin:'4px 0', border:'1px solid #6366f140' }}>
-                                    <div style={{ fontSize:10, color:'#6366f1', letterSpacing:2, textTransform:'uppercase', marginBottom:10 }}>✏️ Editar dia {d}/{String(m).padStart(2,'0')}</div>
-
-                                    {/* Folgas */}
-                                    <div style={{ marginBottom:12 }}>
-                                      <div style={{ fontSize:9, color:'#475569', letterSpacing:2, textTransform:'uppercase', marginBottom:8 }}>Tipo do Dia</div>
-                                      <div style={{ display:'flex', gap:6 }}>
-                                        <button onClick={async()=>{await markDayOff(emp.id,date,offType==='paid'?null:'paid');setEditingDay(null)}}
-                                          style={{ flex:1, padding:'8px 0', borderRadius:8, border:`1px solid ${offType==='paid'?'#a78bfa':'#334155'}`, background:offType==='paid'?'#a78bfa20':'transparent', color:offType==='paid'?'#a78bfa':'#64748b', cursor:'pointer', fontSize:10, fontWeight:700, fontFamily:'inherit' }}>
-                                          🌴 Remunerada
-                                        </button>
-                                        <button onClick={async()=>{await markDayOff(emp.id,date,offType==='unpaid'?null:'unpaid');setEditingDay(null)}}
-                                          style={{ flex:1, padding:'8px 0', borderRadius:8, border:`1px solid ${offType==='unpaid'?'#64748b':'#334155'}`, background:offType==='unpaid'?'#64748b30':'transparent', color:offType==='unpaid'?'#94a3b8':'#64748b', cursor:'pointer', fontSize:10, fontWeight:700, fontFamily:'inherit' }}>
-                                          ⚫ Não Remunerada
-                                        </button>
-                                      </div>
+                              </div>
+                              {isEditing && (
+                                <div style={{ background:'#0f172a', borderRadius:10, padding:12, marginBottom:8, border:'1px solid #6366f140' }}>
+                                  <div style={{ fontSize:10, color:'#6366f1', textTransform:'uppercase', letterSpacing:2, marginBottom:10 }}>✏️ Editar {d}/{mo}</div>
+                                  <div style={{ display:'flex', gap:8, marginBottom:10 }}>
+                                    <div style={{ flex:1 }}>
+                                      <div style={{ fontSize:10, color:'#475569', textTransform:'uppercase', marginBottom:6 }}>Horas</div>
+                                      <input type="number" min="0" max="23" value={editHours} onChange={e=>setEditHours(e.target.value)}
+                                        style={{ width:'100%', boxSizing:'border-box', background:'#1e293b', border:'1px solid #334155', borderRadius:8, padding:'10px 12px', color:'#f1f5f9', fontSize:14, fontFamily:'inherit', outline:'none', textAlign:'center' }} />
                                     </div>
-
-                                    {/* Overtime rate */}
-                                    <div style={{ marginBottom:12 }}>
-                                      <div style={{ fontSize:9, color:'#f59e0b', letterSpacing:2, textTransform:'uppercase', marginBottom:8 }}>⚡ % Hora Extra</div>
-                                      <div style={{ display:'flex', gap:4 }}>
-                                        {[50,70,100].map(rate=>(
-                                          <button key={rate} onClick={()=>saveEditedHours(emp.id,date,Number(editHours)||0,Number(editMinutes)||0,rate)}
-                                            style={{ flex:1, padding:'7px 0', borderRadius:8, border:`1px solid ${otRate===rate?'#f59e0b':'#334155'}`, background:otRate===rate?'#f59e0b20':'transparent', color:otRate===rate?'#f59e0b':'#64748b', cursor:'pointer', fontSize:10, fontWeight:700, fontFamily:'inherit' }}>
-                                            +{rate}%
-                                          </button>
-                                        ))}
-                                      </div>
-                                    </div>
-
-                                    {/* Hours */}
-                                    <div style={{ display:'flex', gap:10, marginBottom:10 }}>
-                                      <div style={{ flex:1 }}>
-                                        <div style={{ fontSize:10, color:'#475569', marginBottom:4 }}>Horas</div>
-                                        <input type="number" min="0" max="24" value={editHours} onChange={e=>setEditHours(e.target.value)}
-                                          style={{ width:'100%', boxSizing:'border-box', background:'#1e293b', border:'1px solid #334155', borderRadius:8, padding:'10px 12px', color:'#f1f5f9', fontSize:16, fontFamily:'inherit', outline:'none', textAlign:'center' }} />
-                                      </div>
-                                      <div style={{ display:'flex', alignItems:'center', paddingTop:20, fontSize:18, color:'#475569' }}>:</div>
-                                      <div style={{ flex:1 }}>
-                                        <div style={{ fontSize:10, color:'#475569', marginBottom:4 }}>Minutos</div>
-                                        <input type="number" min="0" max="59" value={editMinutes} onChange={e=>setEditMinutes(e.target.value)}
-                                          style={{ width:'100%', boxSizing:'border-box', background:'#1e293b', border:'1px solid #334155', borderRadius:8, padding:'10px 12px', color:'#f1f5f9', fontSize:16, fontFamily:'inherit', outline:'none', textAlign:'center' }} />
-                                      </div>
-                                    </div>
-                                    <div style={{ display:'flex', gap:8 }}>
-                                      <Btn full onClick={()=>saveEditedHours(emp.id,date,Number(editHours)||0,Number(editMinutes)||0)} color="#22c55e">💾 Salvar Horas</Btn>
-                                      <Btn full outline color="#64748b" onClick={()=>setEditingDay(null)}>Cancelar</Btn>
+                                    <div style={{ flex:1 }}>
+                                      <div style={{ fontSize:10, color:'#475569', textTransform:'uppercase', marginBottom:6 }}>Minutos</div>
+                                      <input type="number" min="0" max="59" value={editMinutes} onChange={e=>setEditMinutes(e.target.value)}
+                                        style={{ width:'100%', boxSizing:'border-box', background:'#1e293b', border:'1px solid #334155', borderRadius:8, padding:'10px 12px', color:'#f1f5f9', fontSize:14, fontFamily:'inherit', outline:'none', textAlign:'center' }} />
                                     </div>
                                   </div>
-                                )}
-                              </div>
-                            )
-                          })}
-                        </div>
+                                  <div style={{ marginBottom:10 }}>
+                                    <div style={{ fontSize:10, color:'#475569', textTransform:'uppercase', marginBottom:6 }}>⚡ % Hora Extra</div>
+                                    <div style={{ display:'flex', gap:4 }}>
+                                      {[50,70,100].map(r=>(
+                                        <button key={r} onClick={()=>{}} style={{ flex:1, padding:'7px 0', borderRadius:8, border:'none', cursor:'pointer', fontSize:11, fontWeight:700, fontFamily:'inherit', background:(state.dailyOvertimeRate?.[date]??emp.overtimeRate)===r?'#f59e0b':'#1e293b', color:(state.dailyOvertimeRate?.[date]??emp.overtimeRate)===r?'#000':'#64748b' }}>+{r}%</button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                  <div style={{ display:'flex', gap:8 }}>
+                                    <Btn full color="#6366f1" onClick={()=>saveEditedHours(emp.id,date,Number(editHours)||0,Number(editMinutes)||0,state.dailyOvertimeRate?.[date]??emp.overtimeRate)}>💾 Salvar</Btn>
+                                    <Btn full outline color="#64748b" onClick={()=>setEditingDay(null)}>Cancelar</Btn>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })}
                         <div style={{ marginTop:12, paddingTop:12, borderTop:'1px solid #334155', display:'flex', justifyContent:'space-between' }}>
                           <span style={{ fontSize:12, color:'#64748b' }}>Total do mês</span>
                           <span style={{ fontSize:14, fontWeight:800, color:'#22c55e' }}>{msToHHMM(monthTotal)}</span>
                         </div>
                       </div>
                     )
-                  })()}
+                  })}
                 </div>
               )}
 
@@ -1222,7 +1393,7 @@ export default function PontoApp() {
                       <div>
                         <div style={{ fontSize:13, fontWeight:700, color:'#f1f5f9', marginBottom:4 }}>{geofence.address}</div>
                         <div style={{ fontSize:11, color:'#64748b' }}>Raio: <span style={{ color:'#06b6d4', fontWeight:700 }}>{geofence.radius}m</span></div>
-                        <button onClick={async()=>{await deleteDoc(doc(db,'config','geofence'));setGeoForm({address:'',radius:'100'})}}
+                        <button onClick={async()=>{await deleteDoc(cfgDoc('geofence'));setGeoForm({address:'',radius:'100'})}}
                           style={{ marginTop:12, padding:'8px 14px', borderRadius:8, border:'1px solid #ef444440', background:'#ef444415', color:'#ef4444', fontSize:11, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>
                           🗑 Remover Cerca
                         </button>
@@ -1259,7 +1430,6 @@ export default function PontoApp() {
               {view==='empresa' && (
                 <div>
                   <div style={{ fontSize:10, letterSpacing:3, color:'#475569', textTransform:'uppercase', marginBottom:14 }}>🏢 Dados da Empresa</div>
-
                   <div style={{ background:'#1e293b', borderRadius:14, padding:16, marginBottom:14, border:'1px solid #334155', textAlign:'center' }}>
                     <div style={{ fontSize:10, letterSpacing:2, color:'#475569', textTransform:'uppercase', marginBottom:12 }}>Logo da Empresa</div>
                     {companyForm.logo ? (
@@ -1285,16 +1455,14 @@ export default function PontoApp() {
                       </button>
                     )}
                   </div>
-
                   <Input label="Nome da Empresa" value={companyForm.name} onChange={v=>setCompanyForm(f=>({...f,name:v}))} placeholder="Ex: Empresa LTDA" />
                   <Input label="CNPJ" value={companyForm.cnpj} onChange={v=>setCompanyForm(f=>({...f,cnpj:v}))} placeholder="00.000.000/0000-00" />
                   <Input label="Endereço Completo" value={companyForm.address} onChange={v=>setCompanyForm(f=>({...f,address:v}))} placeholder="Rua, Nº, Bairro, Cidade - UF" />
                   <Input label="Telefone" value={companyForm.phone} onChange={v=>setCompanyForm(f=>({...f,phone:v}))} placeholder="(00) 00000-0000" />
                   <Input label="E-mail" value={companyForm.email} onChange={v=>setCompanyForm(f=>({...f,email:v}))} placeholder="contato@empresa.com.br" />
-
                   {companySaved && <div style={{ background:'#22c55e15', border:'1px solid #22c55e40', borderRadius:10, padding:'10px 14px', marginBottom:12, fontSize:12, color:'#22c55e', fontWeight:600 }}>✅ Dados salvos!</div>}
                   <Btn full color="#6366f1" onClick={async()=>{
-                    await setDoc(doc(db,'config','company'), companyForm)
+                    await setDoc(cfgDoc('company'), companyForm)
                     setCompanySaved(true); setTimeout(()=>setCompanySaved(false),3000)
                   }}>💾 Salvar Dados da Empresa</Btn>
                 </div>
