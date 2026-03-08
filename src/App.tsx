@@ -430,7 +430,7 @@ export default function PontoApp() {
     setEditingDay(null); setEditHours(''); setEditMinutes('')
   }
 
-  const generateHolerite = async (emp:Employee, state:EmpState, payment:ReturnType<typeof calcPayment>) => {
+  const generateHolerite = async (emp:Employee, _state:EmpState, payment:ReturnType<typeof calcPayment>) => {
     if (!(window as any).jspdf) {
       await new Promise<void>((resolve,reject) => {
         const s = document.createElement('script')
