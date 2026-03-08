@@ -605,8 +605,10 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
     txt(emp.name, mg+17, y+5.5, {size:12,bold:true,color:'#0F172A'})
     txt(emp.role, mg+17, y+10.5, {size:8.5,color:'#475569',italic:true})
 
-    // Badge matrícula
-    const matRef=String(emp.id).slice(-6)
+    // Badge matrícula — sequencial por ordem de cadastro
+    const sortedIds=[...employees].sort((a,b)=>a.id-b.id).map(e=>e.id)
+    const matNum=sortedIds.indexOf(emp.id)+1
+    const matRef=String(matNum).padStart(3,"0")
     box(W-mg-34, y+1, 34, 10, '#F1F5F9', '#E2E8F0', 2)
     txt('Matrícula', W-mg-17, y+5, {size:6,color:'#94A3B8',align:'center'})
     txt(matRef, W-mg-17, y+9.5, {size:8,bold:true,color:'#334155',align:'center'})
