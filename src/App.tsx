@@ -351,7 +351,6 @@ export default function PontoApp() {
     // Returns ms of night work (22:00-05:00) within a given interval
     let nightTotal = 0
     const HOUR = 3600000
-    const DAY = 86400000
     // Walk through each hour slot in the interval
     let cursor = startMs
     while (cursor < endMs) {
@@ -433,7 +432,7 @@ export default function PontoApp() {
       setSuccessMsg('Funcionário cadastrado!')
     }
     setTimeout(() => setSuccessMsg(''), 3000)
-    setForm({ name: '', role: '', username: '', password: '', payType: 'day', payValue: '', hoursPerDay: '8' })
+    setForm({ name: '', role: '', username: '', password: '', payType: 'day', payValue: '', hoursPerDay: '8', overtimeRate: '50' })
     setFormErrors({}); setEditingEmp(null); setAdminView('list')
   }
 
