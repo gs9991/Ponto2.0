@@ -65,6 +65,7 @@ interface Employee {
   payType: 'day' | 'hour'; payValue: number; hoursPerDay: number
   overtimeRate: 50 | 70 | 100
   discounts: Discount[]
+  gratifications: Discount[]
 }
 
 interface LogEntry { type: string; time: Date }
@@ -161,6 +162,9 @@ export default function PontoApp() {
   // Discount form
   const [discountTarget, setDiscountTarget] = useState<number | null>(null)
   const [discountForm, setDiscountForm] = useState({ value: '', reason: '' })
+  const [gratifTarget, setGratifTarget] = useState<number | null>(null)
+  const [gratifForm, setGratifForm] = useState({ value: '', reason: '' })
+  const [gratifError, setGratifError] = useState('')
   const [discountError, setDiscountError] = useState('')
   const [expandedReport, setExpandedReport] = useState<number | null>(null)
   const [extractContent, setExtractContent] = useState<string | null>(null)
@@ -411,10 +415,11 @@ export default function PontoApp() {
     }
 
     const manualDiscountTotal = emp.discounts.reduce((s, d) => s + d.value, 0)
+    const gratificationsTotal = (emp.gratifications || []).reduce((s, d) => s + d.value, 0)
     const totalDeductions = autoDeductions + manualDiscountTotal
-    const net = Math.max(0, grossValue - totalDeductions)
+    const net = Math.max(0, grossValue - totalDeductions) + gratificationsTotal
 
-    return { totalHours, totalMs, daysWorked, paidOffDays, totalPaidDays, grossValue, autoDeductions, manualDiscountTotal, totalDeductions, net, breakHours, breakMs: totalBreakMs, overtimeMs, overtimeByRate, nightMs, nightBonus, overtimeRate }
+    return { totalHours, totalMs, daysWorked, paidOffDays, totalPaidDays, grossValue, autoDeductions, manualDiscountTotal, gratificationsTotal, totalDeductions, net, breakHours, breakMs: totalBreakMs, overtimeMs, overtimeByRate, nightMs, nightBonus, overtimeRate }
   }
 
   // ── Employee CRUD ─────────────────────────────────────────────────────────
@@ -439,7 +444,7 @@ export default function PontoApp() {
       setSuccessMsg('Funcionário atualizado!')
     } else {
       const id = Date.now()
-      const newEmp = { id, password: form.password, discounts: [], ...data }
+      const newEmp = { id, password: form.password, discounts: [], gratifications: [], ...data }
       await setDoc(doc(db, 'employees', String(id)), newEmp)
       setSuccessMsg('Funcionário cadastrado!')
     }
@@ -479,6 +484,28 @@ export default function PontoApp() {
     const emp = employees.find(e => e.id === empId)
     if (!emp) return
     const updated = { ...emp, discounts: emp.discounts.filter(d => d.id !== discountId) }
+    await setDoc(doc(db, 'employees', String(empId)), updated)
+  }
+
+  const addGratification = async (empId: number) => {
+    setGratifError('')
+    if (!gratifForm.value || isNaN(Number(gratifForm.value)) || Number(gratifForm.value) <= 0) {
+      setGratifError('Informe um valor válido'); return
+    }
+    if (!gratifForm.reason.trim()) { setGratifError('Informe o motivo'); return }
+    const newGratif: Discount = { id: Date.now(), value: Number(gratifForm.value), reason: gratifForm.reason.trim(), date: formatDateShort(new Date()) }
+    const emp = employees.find(e => e.id === empId)
+    if (!emp) return
+    const updated = { ...emp, gratifications: [...(emp.gratifications || []), newGratif] }
+    await setDoc(doc(db, 'employees', String(empId)), updated)
+    setGratifForm({ value: '', reason: '' })
+    setGratifTarget(null)
+  }
+
+  const removeGratification = async (empId: number, gratifId: number) => {
+    const emp = employees.find(e => e.id === empId)
+    if (!emp) return
+    const updated = { ...emp, gratifications: (emp.gratifications || []).filter(g => g.id !== gratifId) }
     await setDoc(doc(db, 'employees', String(empId)), updated)
   }
 
@@ -625,18 +652,19 @@ export default function PontoApp() {
     }
     lines.push(`Total Descontos   : - ${fmt(payment.totalDeductions)}`)
     lines.push('')
+    if ((emp.gratifications || []).length > 0) {
+      lines.push('━'.repeat(48))
+      lines.push('GRATIFICACOES')
+      lines.push('━'.repeat(48))
+      emp.gratifications.forEach(g => lines.push(`${g.reason} (${g.date}) : + ${fmt(g.value)}`))
+      lines.push(`Total Gratificacoes : + ${fmt(payment.gratificationsTotal)}`)
+      lines.push('')
+    }
     lines.push('━'.repeat(48))
     lines.push(`TOTAL LIQUIDO A RECEBER: ${fmt(payment.net)}`)
     lines.push('━'.repeat(48))
     lines.push('')
-    if (state.log.length > 0) {
-      lines.push('HISTORICO DE REGISTROS')
-      lines.push('━'.repeat(48))
-      ;[...state.log].reverse().forEach(entry => {
-        lines.push(`${typeLabel[entry.type].padEnd(18)} ${formatDateShort(entry.time)}  ${formatTime(entry.time)}`)
-      })
-      lines.push('')
-    }
+
     lines.push('━'.repeat(48))
     lines.push('Documento gerado automaticamente pelo PontoApp.')
     setExtractContent(lines.join('\n'))
@@ -910,6 +938,27 @@ export default function PontoApp() {
                       </div>
                     )}
                   </div>
+
+                  {(myEmpData.gratifications || []).length > 0 && (
+                    <div style={{ background: '#22c55e10', borderRadius: 14, padding: 14, marginBottom: 14, border: '1px solid #22c55e30' }}>
+                      <div style={{ fontSize: 10, letterSpacing: 3, color: '#22c55e', textTransform: 'uppercase', marginBottom: 10 }}>⭐ Gratificações</div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        {(myEmpData.gratifications || []).map(g => (
+                          <div key={g.id} style={{ background: '#1e293b', borderRadius: 8, padding: '10px 12px', borderLeft: '3px solid #22c55e', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                            <div>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: '#86efac' }}>{g.reason}</div>
+                              <div style={{ fontSize: 10, color: '#64748b', marginTop: 2 }}>{g.date}</div>
+                            </div>
+                            <div style={{ fontSize: 13, fontWeight: 800, color: '#22c55e', flexShrink: 0, marginLeft: 8 }}>+ {fmt(g.value)}</div>
+                          </div>
+                        ))}
+                      </div>
+                      <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #334155', display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ fontSize: 12, color: '#94a3b8', fontWeight: 600 }}>Total Gratificações</span>
+                        <span style={{ fontSize: 13, fontWeight: 800, color: '#22c55e' }}>+ {fmt(empPayment.gratificationsTotal)}</span>
+                      </div>
+                    </div>
+                  )}
 
                   <div style={{ background: '#22c55e20', border: '1px solid #22c55e60', borderRadius: 14, padding: 16, textAlign: 'center', marginBottom: 14 }}>
                     <div style={{ fontSize: 10, color: '#4ade80', textTransform: 'uppercase', letterSpacing: 2, marginBottom: 6 }}>Total a Receber</div>
@@ -1188,6 +1237,66 @@ export default function PontoApp() {
                               )}
                             </div>
 
+                            {/* Gratificações */}
+                            {(() => {
+                              const isAddingGratif = gratifTarget === emp.id
+                              return (
+                                <div style={{ background: '#0f172a', borderRadius: 12, padding: 12, marginBottom: 12, border: '1px solid #22c55e25' }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                                    <div style={{ fontSize: 10, letterSpacing: 2, color: '#22c55e', textTransform: 'uppercase' }}>⭐ Gratificações</div>
+                                    <button onClick={() => { setGratifTarget(isAddingGratif ? null : emp.id); setGratifForm({ value: '', reason: '' }); setGratifError('') }}
+                                      style={{ background: '#22c55e20', border: '1px solid #22c55e40', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', fontSize: 11, fontWeight: 700, color: '#22c55e', fontFamily: 'inherit' }}>
+                                      {isAddingGratif ? '✕ Cancelar' : '+ Gratificação'}
+                                    </button>
+                                  </div>
+                                  {isAddingGratif && (
+                                    <div style={{ background: '#1e293b', borderRadius: 10, padding: 12, marginBottom: 10, border: '1px solid #334155' }}>
+                                      <div style={{ fontSize: 10, letterSpacing: 2, color: '#475569', textTransform: 'uppercase', marginBottom: 10 }}>Nova Gratificação</div>
+                                      <div style={{ marginBottom: 10 }}>
+                                        <div style={{ fontSize: 10, letterSpacing: 2, color: '#475569', textTransform: 'uppercase', marginBottom: 6 }}>Valor (R$)</div>
+                                        <input type="number" value={gratifForm.value} onChange={e => setGratifForm(f => ({ ...f, value: e.target.value }))} placeholder="Ex: 100.00"
+                                          style={{ width: '100%', boxSizing: 'border-box', background: '#0f172a', border: '1px solid #334155', borderRadius: 8, padding: '10px 12px', color: '#f1f5f9', fontSize: 13, fontFamily: 'inherit', outline: 'none' }} />
+                                      </div>
+                                      <div style={{ marginBottom: 10 }}>
+                                        <div style={{ fontSize: 10, letterSpacing: 2, color: '#475569', textTransform: 'uppercase', marginBottom: 6 }}>Motivo</div>
+                                        <textarea value={gratifForm.reason} onChange={e => setGratifForm(f => ({ ...f, reason: e.target.value }))} placeholder="Ex: Bom desempenho..."
+                                          rows={2} style={{ width: '100%', boxSizing: 'border-box', background: '#0f172a', border: '1px solid #334155', borderRadius: 8, padding: '10px 12px', color: '#f1f5f9', fontSize: 12, fontFamily: 'inherit', outline: 'none', resize: 'none' }} />
+                                      </div>
+                                      {gratifError && <div style={{ fontSize: 11, color: '#ef4444', marginBottom: 8 }}>⚠️ {gratifError}</div>}
+                                      <Btn full onClick={() => addGratification(emp.id)} color="#22c55e">✅ Confirmar Gratificação</Btn>
+                                    </div>
+                                  )}
+                                  {(emp.gratifications || []).length === 0 && !isAddingGratif ? (
+                                    <div style={{ fontSize: 12, color: '#475569', textAlign: 'center', padding: '6px 0' }}>Nenhuma gratificação lançada</div>
+                                  ) : (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                      {(emp.gratifications || []).map(g => (
+                                        <div key={g.id} style={{ background: '#1e293b', borderRadius: 8, padding: '10px 12px', borderLeft: '3px solid #22c55e' }}>
+                                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                            <div style={{ flex: 1, minWidth: 0 }}>
+                                              <div style={{ fontSize: 12, fontWeight: 700, color: '#86efac' }}>{g.reason}</div>
+                                              <div style={{ fontSize: 10, color: '#64748b', marginTop: 2 }}>Lançado em {g.date}</div>
+                                            </div>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, marginLeft: 8 }}>
+                                              <span style={{ fontSize: 13, fontWeight: 800, color: '#22c55e' }}>+ {fmt(g.value)}</span>
+                                              <button onClick={() => removeGratification(emp.id, g.id)}
+                                                style={{ background: '#ef444420', border: '1px solid #ef444440', borderRadius: 6, padding: '3px 7px', cursor: 'pointer', color: '#ef4444', fontSize: 10, fontFamily: 'inherit' }}>🗑</button>
+                                            </div>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                  {(emp.gratifications || []).length > 0 && (
+                                    <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #334155', display: 'flex', justifyContent: 'space-between' }}>
+                                      <span style={{ fontSize: 12, color: '#94a3b8', fontWeight: 600 }}>Total Gratificações</span>
+                                      <span style={{ fontSize: 13, fontWeight: 800, color: '#22c55e' }}>+ {fmt(pay.gratificationsTotal)}</span>
+                                    </div>
+                                  )}
+                                </div>
+                              )
+                            })()}
+
                             <div style={{ background: '#22c55e20', border: '1px solid #22c55e40', borderRadius: 10, padding: '12px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                               <span style={{ fontSize: 13, fontWeight: 700, color: '#4ade80' }}>✅ Total Líquido</span>
                               <span style={{ fontSize: 18, fontWeight: 900, color: '#22c55e' }}>{fmt(pay.net)}</span>
@@ -1389,7 +1498,7 @@ export default function PontoApp() {
                                     <div style={{ marginBottom: 12 }}>
                                       <div style={{ fontSize: 9, color: '#f59e0b', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 6, fontWeight: 700 }}>⚡ % Hora Extra neste dia</div>
                                       <div style={{ display: 'flex', background: '#0f172a', borderRadius: 8, padding: 3, gap: 2 }}>
-                                        {([null, 50, 70, 100] as (number | null)[]).map(rate => {
+                                        {([null, 70, 100] as (number | null)[]).map(rate => {
                                           const empDefaultRate = employees.find(e => e.id === emp.id)?.overtimeRate || 50
                                           const isSelected = editOvertimeRate === rate
                                           const label = rate === null ? `Padrão (${empDefaultRate}%)` : `+${rate}%`
