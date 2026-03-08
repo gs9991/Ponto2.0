@@ -257,9 +257,34 @@ function SuperAdminScreen({ onLogout }: { onLogout: () => void }) {
           {view==='new' && (
             <div style={{ background:'#1e293b', borderRadius:16, padding:18, border:'1px solid #f59e0b30', marginBottom:16 }}>
               <div style={{ fontSize:14, fontWeight:800, color:'#f1f5f9', marginBottom:16 }}>➕ Nova Empresa</div>
-              <Input label="Código (slug)" value={form.slug} onChange={v=>setForm(f=>({...f,slug:v.toLowerCase()}))} placeholder="Ex: mercearia-do-ze" error={formErrors.slug} />
-              <div style={{ fontSize:10, color:'#475569', marginTop:-10, marginBottom:14 }}>Funcionários usarão este código para acessar o app.</div>
-              <Input label="Nome da Empresa" value={form.name} onChange={v=>setForm(f=>({...f,name:v}))} placeholder="Ex: Mercearia do Zé LTDA" error={formErrors.name} />
+
+              <Input label="Nome da Empresa" value={form.name} onChange={v => {
+                // Auto-sugere o slug a partir do nome se o slug ainda não foi editado manualmente
+                const autoSlug = v.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')
+                setForm(f => ({ ...f, name: v, slug: f.slug === '' || f.slug === form.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'') ? autoSlug : f.slug }))
+              }} placeholder="Ex: Mercearia do Zé LTDA" error={formErrors.name} />
+
+              <div style={{ marginBottom:14 }}>
+                <div style={{ fontSize:10, letterSpacing:3, color:'#f59e0b', textTransform:'uppercase', marginBottom:6 }}>Código de Acesso (slug)</div>
+                <div style={{ position:'relative' }}>
+                  <input
+                    value={form.slug}
+                    onChange={e => setForm(f => ({ ...f, slug: e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g,'') }))}
+                    placeholder="Ex: mercearia-ze"
+                    style={{ width:'100%', boxSizing:'border-box', background:'#0f172a', border:`1px solid ${formErrors.slug?'#ef4444':'#f59e0b60'}`, borderRadius:10, padding:'12px 14px', color:'#f59e0b', fontSize:14, fontWeight:800, fontFamily:'inherit', outline:'none', letterSpacing:1 }}
+                  />
+                </div>
+                {formErrors.slug && <div style={{ fontSize:11, color:'#ef4444', marginTop:4 }}>{formErrors.slug}</div>}
+                <div style={{ fontSize:10, color:'#475569', marginTop:6 }}>
+                  Este é o código que o cliente digitará para acessar o app. Use apenas letras minúsculas, números, <code style={{color:'#64748b'}}>-</code> e <code style={{color:'#64748b'}}>_</code>.
+                </div>
+                {form.slug && (
+                  <div style={{ marginTop:8, background:'#0f172a', borderRadius:8, padding:'8px 12px', border:'1px solid #f59e0b20', fontSize:12, color:'#64748b' }}>
+                    Preview: <span style={{ color:'#f59e0b', fontWeight:800 }}>{form.slug}</span>
+                  </div>
+                )}
+              </div>
+
               <Input label="Usuário do Admin" value={form.adminUsername} onChange={v=>setForm(f=>({...f,adminUsername:v}))} placeholder="Ex: admin" error={formErrors.adminUsername} />
               <Input label="Senha do Admin" type="password" value={form.adminPassword} onChange={v=>setForm(f=>({...f,adminPassword:v}))} placeholder="Senha de acesso do admin" error={formErrors.adminPassword} />
               <Btn full color="#f59e0b" onClick={saveCompany}>✅ Criar Empresa</Btn>
@@ -277,12 +302,24 @@ function SuperAdminScreen({ onLogout }: { onLogout: () => void }) {
               )}
               {companies.map(c => (
                 <div key={c.slug} style={{ background:'#1e293b', borderRadius:14, padding:16, border:'1px solid #334155' }}>
+                  {/* Código em destaque */}
+                  <div style={{ background:'#0f172a', borderRadius:10, padding:'10px 14px', marginBottom:12, border:'1px solid #f59e0b30', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                    <div>
+                      <div style={{ fontSize:9, letterSpacing:3, color:'#f59e0b', textTransform:'uppercase', marginBottom:3 }}>🔑 Código de Acesso</div>
+                      <div style={{ fontSize:20, fontWeight:900, color:'#f59e0b', letterSpacing:2 }}>{c.slug}</div>
+                    </div>
+                    <button
+                      onClick={() => { navigator.clipboard.writeText(c.slug); }}
+                      title="Copiar código"
+                      style={{ background:'#f59e0b20', border:'1px solid #f59e0b40', borderRadius:8, padding:'8px 12px', cursor:'pointer', fontSize:12, color:'#f59e0b', fontFamily:'inherit', fontWeight:700 }}>
+                      📋 Copiar
+                    </button>
+                  </div>
                   <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
                     <div>
-                      <div style={{ fontSize:14, fontWeight:800, color:'#f1f5f9', marginBottom:4 }}>{c.name}</div>
-                      <div style={{ fontSize:11, color:'#f59e0b', background:'#f59e0b15', borderRadius:6, padding:'3px 8px', display:'inline-block', marginBottom:6 }}>/{c.slug}</div>
-                      <div style={{ fontSize:11, color:'#64748b' }}>Admin: <span style={{ color:'#94a3b8' }}>{c.adminUsername}</span></div>
-                      <div style={{ fontSize:10, color:'#475569', marginTop:2 }}>Criada em {new Date(c.createdAt).toLocaleDateString('pt-BR')}</div>
+                      <div style={{ fontSize:14, fontWeight:800, color:'#f1f5f9', marginBottom:6 }}>{c.name}</div>
+                      <div style={{ fontSize:11, color:'#64748b' }}>Admin: <span style={{ color:'#94a3b8', fontWeight:700 }}>{c.adminUsername}</span></div>
+                      <div style={{ fontSize:10, color:'#475569', marginTop:3 }}>Criada em {new Date(c.createdAt).toLocaleDateString('pt-BR')}</div>
                     </div>
                     <Btn small outline color="#ef4444" onClick={()=>deleteCompany(c.slug)}>🗑</Btn>
                   </div>
