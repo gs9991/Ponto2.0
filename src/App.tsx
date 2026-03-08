@@ -532,33 +532,251 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
 
   const genHolerite=async(emp:Employee,_st:EmpState,pay:ReturnType<typeof calcPay>,hm:string)=>{
     if(!(window as any).jspdf){await new Promise<void>((res,rej)=>{const s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';s.onload=()=>res();s.onerror=()=>rej();document.head.appendChild(s)})}
-    const{jsPDF}=(window as any).jspdf;const jd=new jsPDF({orientation:'portrait',unit:'mm',format:'a4'});const W=210,mg=16;let y=0;const c2=W/2+2,rH=7
-    const rect=(x:number,yy:number,w:number,h:number,fill?:string)=>{if(fill){jd.setFillColor(fill);jd.rect(x,yy,w,h,'F')}}
-    const txt=(t:string,x:number,yy:number,o?:{size?:number;bold?:boolean;color?:string;align?:'left'|'right'|'center'})=>{jd.setFontSize(o?.size||9);jd.setFont('helvetica',o?.bold?'bold':'normal');if(o?.color){const[r,g,b]=o.color.match(/\w\w/g)!.map(h=>parseInt(h,16));jd.setTextColor(r,g,b)}else jd.setTextColor(30,30,30);jd.text(t,x,yy,{align:o?.align||'left'})}
-    const ln=(x1:number,yy:number,x2:number,color='#E8EDF5')=>{const[r,g,b]=color.match(/\w\w/g)!.map(h=>parseInt(h,16));jd.setDrawColor(r,g,b);jd.setLineWidth(0.3);jd.line(x1,yy,x2,yy)}
-    rect(0,0,W,36,'#5B4CF5');y=10
-    if(co?.logo){try{jd.addImage(co.logo,'AUTO',mg,4,28,28,'','FAST')}catch(_){};const tx=mg+32;txt(co?.name||'PontoApp',tx,y+2,{size:14,bold:true,color:'#fff'});if(co?.cnpj)txt(`CNPJ: ${co.cnpj}`,tx,y+8,{size:8,color:'#C7D2FE'});if(co?.address)txt(co.address,tx,y+14,{size:7,color:'#C7D2FE'})}
-    else{txt(co?.name||'PontoApp',mg,y+4,{size:16,bold:true,color:'#fff'});if(co?.cnpj)txt(`CNPJ: ${co.cnpj}`,mg,y+11,{size:8,color:'#C7D2FE'});if(co?.address)txt(co.address,mg,y+17,{size:7,color:'#C7D2FE'})}
-    txt('HOLERITE',W-mg,y+2,{size:13,bold:true,color:'#C7D2FE',align:'right'})
+    const{jsPDF}=(window as any).jspdf
+    const jd=new jsPDF({orientation:'portrait',unit:'mm',format:'a4'})
+    const W=210, H=297, mg=18, cW=W-mg*2
+    let y=0
+
+    // ── helpers ──
+    const hex2rgb=(h:string)=>h.match(/\w\w/g)!.map(x=>parseInt(x,16)) as [number,number,number]
+    const setFill=(h:string)=>{const[r,g,b]=hex2rgb(h);jd.setFillColor(r,g,b)}
+    const setStroke=(h:string,w=0.25)=>{const[r,g,b]=hex2rgb(h);jd.setDrawColor(r,g,b);jd.setLineWidth(w)}
+    const setColor=(h:string)=>{const[r,g,b]=hex2rgb(h);jd.setTextColor(r,g,b)}
+    const box=(x:number,yy:number,w:number,h:number,fill:string,stroke?:string,r=0)=>{
+      setFill(fill);if(stroke){setStroke(stroke,0.3);jd.roundedRect(x,yy,w,h,r,r,'FD')}
+      else jd.roundedRect(x,yy,w,h,r,r,'F')
+    }
+    const line=(x1:number,yy:number,x2:number,col='#E2E8F0',w=0.25)=>{setStroke(col,w);jd.line(x1,yy,x2,yy)}
+    const vline=(xx:number,y1:number,y2:number,col='#E2E8F0',w=0.25)=>{setStroke(col,w);jd.line(xx,y1,xx,y2)}
+    const txt=(t:string,x:number,yy:number,o:{size?:number;bold?:boolean;italic?:boolean;color?:string;align?:'left'|'right'|'center'|'justify'}={})=>{
+      jd.setFontSize(o.size||9)
+      jd.setFont('helvetica',o.bold&&o.italic?'bolditalic':o.bold?'bold':o.italic?'italic':'normal')
+      setColor(o.color||'#1E293B')
+      jd.text(t,x,yy,{align:o.align||'left'})
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // HEADER — barra escura de topo + bloco empresa/título
+    // ══════════════════════════════════════════════════════════
+    // Faixa decorativa topo
+    box(0,0,W,3,'#1E293B')
+    // Fundo header principal
+    box(0,3,W,42,'#0F172A')
+    // Faixa colorida lateral esquerda
+    box(0,3,4,42,'#5B4CF5')
+
+    // Logo da empresa (se houver)
+    let logoEndX = mg+8
+    if(co?.logo){try{jd.addImage(co.logo,'AUTO',mg+8,8,22,22,'','FAST');logoEndX=mg+8+22+6}catch(_){}}
+
+    // Nome e dados da empresa
+    txt(co?.name||'PontoApp', logoEndX, 16, {size:15,bold:true,color:'#F8FAFC'})
+    const subInfoY=21
+    if(co?.cnpj) txt(`CNPJ: ${co.cnpj}`, logoEndX, subInfoY, {size:7.5,color:'#94A3B8'})
+    if(co?.address) txt(co.address, logoEndX, subInfoY+5, {size:7,color:'#64748B'})
+    if(co?.phone||co?.email) txt([co?.phone,co?.email].filter(Boolean).join('  ·  '), logoEndX, subInfoY+10, {size:7,color:'#64748B'})
+
+    // Bloco HOLERITE (lado direito)
     const[hY,hM]=hm.split('-').map(Number)
-    txt(new Date(hY,hM-1,1).toLocaleDateString('pt-BR',{month:'long',year:'numeric'}),W-mg,y+9,{size:8,color:'#A5B4FC',align:'right'})
-    txt(`Gerado: ${new Date().toLocaleString('pt-BR')}`,W-mg,y+15,{size:7,color:'#818CF8',align:'right'})
-    y=42;rect(mg,y,W-mg*2,6,'#F7F8FC');txt('DADOS DO FUNCIONÁRIO',mg+2,y+4.5,{size:8,bold:true,color:'#475569'});y+=8
-    const er=[['Nome',emp.name,'Cargo',emp.role],['CPF',emp.cpf||'—','Admissão',emp.admission?new Date(emp.admission+'T12:00:00').toLocaleDateString('pt-BR'):'—'],['Pagamento',emp.payType==='hour'?'Por Hora':'Por Dia','Salário Base',fmt(emp.payValue)+(emp.payType==='hour'?'/h':'/dia')]]
-    er.forEach((row,i)=>{if(i%2===0)rect(mg,y,W-mg*2,rH,'#F7F8FC');txt(row[0],mg+2,y+5,{size:7.5,color:'#64748b'});txt(row[1],mg+30,y+5,{size:8,bold:true});txt(row[2],c2+2,y+5,{size:7.5,color:'#64748b'});txt(row[3],c2+30,y+5,{size:8,bold:true});ln(mg,y+rH,W-mg);y+=rH})
-    y+=6;rect(mg,y,W-mg*2,6,'#ECFDF5');txt('PROVENTOS',mg+2,y+4.5,{size:8,bold:true,color:'#059669'});y+=8
-    const earn:[string,string,string][]=[['Horas/Dias Trabalhados',`${fmtH(pay.totalMs)} | ${pay.daysWorked} dia(s)`,fmt(pay.regularValue)]]
-    Object.entries(pay.overtimeByRate).sort(([a],[b])=>Number(a)-Number(b)).forEach(([r,ms])=>{const hv=emp.payType==='hour'?emp.payValue:emp.payValue/emp.hoursPerDay;earn.push([`Hora Extra +${r}%`,fmtH(ms as number),fmt((ms as number)/3600000*hv*(1+Number(r)/100))])})
-    if(pay.nightMs>0)earn.push(['Adicional Noturno (20%)',fmtH(pay.nightMs),fmt(pay.nightBonus)]);(emp.gratifications||[]).forEach(g=>earn.push([`Gratificação: ${g.reason}`,g.date,fmt(g.value)]))
-    earn.forEach((row,i)=>{if(i%2===0)rect(mg,y,W-mg*2,rH,'#F7F8FC');txt(row[0],mg+2,y+5,{size:8});txt(row[1],W/2,y+5,{size:8,color:'#475569',align:'center'});txt(row[2],W-mg-2,y+5,{size:8,bold:true,color:'#059669',align:'right'});ln(mg,y+rH,W-mg);y+=rH})
-    rect(mg,y,W-mg*2,7,'#DCFCE7');txt('TOTAL PROVENTOS',mg+2,y+5,{size:8.5,bold:true,color:'#15803d'});txt(fmt(pay.grossValue),W-mg-2,y+5,{size:9,bold:true,color:'#15803d',align:'right'});y+=10
-    rect(mg,y,W-mg*2,6,'#FFF1F2');txt('DESCONTOS',mg+2,y+4.5,{size:8,bold:true,color:'#E11D48'});y+=8
-    const ded:[string,string,string][]=[]; (emp.discounts||[]).forEach(d=>ded.push([d.reason,d.date,fmt(d.value)]));const fgtsV=emp.fgts?pay.grossValue*0.08:0;if(emp.fgts)ded.push(['FGTS (8%)','—',fmt(fgtsV)])
-    if(ded.length===0){txt('Nenhum desconto.',mg+2,y+5,{size:8,color:'#94a3b8'});y+=rH}else{ded.forEach((row,i)=>{if(i%2===0)rect(mg,y,W-mg*2,rH,'#FFF5F5');txt(row[0],mg+2,y+5,{size:8});txt(row[1],W/2,y+5,{size:8,color:'#475569',align:'center'});txt(`- ${row[2]}`,W-mg-2,y+5,{size:8,bold:true,color:'#E11D48',align:'right'});ln(mg,y+rH,W-mg);y+=rH})}
-    rect(mg,y,W-mg*2,7,'#FFE4E6');txt('TOTAL DESCONTOS',mg+2,y+5,{size:8.5,bold:true,color:'#E11D48'});txt(`- ${fmt(pay.totalDeductions+fgtsV)}`,W-mg-2,y+5,{size:9,bold:true,color:'#E11D48',align:'right'});y+=12
-    rect(mg,y,W-mg*2,12,'#5B4CF5');txt('VALOR LÍQUIDO A RECEBER',mg+4,y+8,{size:10,bold:true,color:'#fff'});txt(fmt(pay.net-fgtsV),W-mg-4,y+8,{size:13,bold:true,color:'#ECFDF5',align:'right'});y+=16
-    ln(mg,y+14,mg+70);ln(W-mg-70,y+14,W-mg);txt('Assinatura do Empregador',mg+35,y+18,{size:7,color:'#94a3b8',align:'center'});txt('Assinatura do Funcionário',W-mg-35,y+18,{size:7,color:'#94a3b8',align:'center'})
-    y+=24;ln(mg,y,W-mg);txt('Documento gerado automaticamente pelo PontoApp.',W/2,y+4,{size:6.5,color:'#94a3b8',align:'center'})
+    const mesRef=new Date(hY,hM-1,1).toLocaleDateString('pt-BR',{month:'long',year:'numeric'}).toUpperCase()
+    box(W-mg-52, 8, 52, 28, '#1E3A5F', '#2563EB', 2)
+    txt('RECIBO DE PAGAMENTO', W-mg-52+26, 16, {size:6.5,bold:true,color:'#93C5FD',align:'center'})
+    txt('DE SALÁRIO', W-mg-52+26, 21, {size:6.5,bold:true,color:'#93C5FD',align:'center'})
+    line(W-mg-52+4, 23, W-mg-4, '#2563EB', 0.3)
+    txt(mesRef, W-mg-52+26, 29, {size:8,bold:true,color:'#DBEAFE',align:'center'})
+    txt(`Gerado em ${new Date().toLocaleDateString('pt-BR')}`, W-mg-52+26, 34, {size:6,color:'#64748B',align:'center'})
+
+    y = 52
+
+    // ══════════════════════════════════════════════════════════
+    // DADOS DO FUNCIONÁRIO
+    // ══════════════════════════════════════════════════════════
+    // Cabeçalho da seção
+    box(mg, y, cW, 7, '#1E293B', undefined, 1)
+    box(mg, y, 3, 7, '#5B4CF5', undefined, 0)
+    txt('IDENTIFICAÇÃO DO FUNCIONÁRIO', mg+6, y+4.8, {size:7.5,bold:true,color:'#E2E8F0'})
+    y+=10
+
+    // Avatar/Iniciais
+    box(mg, y, 14, 14, '#EEF0FD', '#C7D2FE', 2)
+    txt(emp.avatar, mg+7, y+9.5, {size:11,bold:true,color:'#5B4CF5',align:'center'})
+
+    // Dados principais
+    txt(emp.name, mg+17, y+5.5, {size:12,bold:true,color:'#0F172A'})
+    txt(emp.role, mg+17, y+10.5, {size:8.5,color:'#475569',italic:true})
+
+    // Badge matrícula
+    const matRef=String(emp.id).slice(-6)
+    box(W-mg-34, y+1, 34, 10, '#F1F5F9', '#E2E8F0', 2)
+    txt('Matrícula', W-mg-17, y+5, {size:6,color:'#94A3B8',align:'center'})
+    txt(matRef, W-mg-17, y+9.5, {size:8,bold:true,color:'#334155',align:'center'})
+    y+=18
+
+    // Grade de dados (4 colunas)
+    const fields=[
+      {l:'CPF',v:emp.cpf||'Não informado'},
+      {l:'Data de Admissão',v:emp.admission?new Date(emp.admission+'T12:00:00').toLocaleDateString('pt-BR'):'Não informada'},
+      {l:'Tipo de Pagamento',v:emp.payType==='hour'?'Por Hora':'Por Dia'},
+      {l:'Salário Base',v:fmt(emp.payValue)+(emp.payType==='hour'?'/hora':'/dia')},
+      {l:'Carga Horária',v:`${emp.hoursPerDay}h/dia`},
+      {l:'FGTS',v:emp.fgts?'Optante (8%)':'Não optante'},
+    ]
+    const colW=cW/3, colH=11
+    fields.forEach((f,i)=>{
+      const col=i%3, row=Math.floor(i/3)
+      const fx=mg+col*colW, fy=y+row*(colH+2)
+      box(fx, fy, colW-2, colH, col%2===0?'#F8FAFC':'#FFFFFF', '#E8EDF5', 1)
+      txt(f.l, fx+3, fy+4.5, {size:6.5,color:'#94A3B8'})
+      txt(f.v, fx+3, fy+8.8, {size:8,bold:true,color:'#1E293B'})
+    })
+    y+=2*(colH+2)+8
+
+    // ══════════════════════════════════════════════════════════
+    // RESUMO DE HORAS — mini dashboard
+    // ══════════════════════════════════════════════════════════
+    box(mg, y, cW, 7, '#F0FDF4', '#BBF7D0', 1)
+    box(mg, y, 3, 7, '#059669', undefined, 0)
+    txt('RESUMO DE HORAS TRABALHADAS', mg+6, y+4.8, {size:7.5,bold:true,color:'#065F46'})
+    y+=10
+
+    const hStats=[
+      {l:'Horas Normais', v:fmtH(Math.min(pay.totalMs,(emp.hoursPerDay*3600000*pay.daysWorked))), c:'#059669'},
+      {l:'Horas Extras', v:pay.overtimeMs>0?fmtH(pay.overtimeMs):'—', c:pay.overtimeMs>0?'#D97706':'#94A3B8'},
+      {l:'Adicional Noturno', v:pay.nightMs>0?fmtH(pay.nightMs):'—', c:pay.nightMs>0?'#7C3AED':'#94A3B8'},
+      {l:'Dias Trabalhados', v:`${pay.daysWorked} dias`, c:'#0369A1'},
+    ]
+    const sW=cW/4
+    hStats.forEach((s,i)=>{
+      const sx=mg+i*sW
+      box(sx, y, sW-2, 16, '#FFFFFF', '#E2E8F0', 1)
+      // Ícone colorido no topo do card
+      box(sx+sW/2-5, y+1.5, 10, 2, s.c==='#94A3B8'?'#F1F5F9':s.c+'22', undefined, 1)
+      txt(s.l, sx+(sW-2)/2, y+7, {size:6,color:'#64748B',align:'center'})
+      txt(s.v, sx+(sW-2)/2, y+13, {size:9.5,bold:true,color:s.c,align:'center'})
+    })
+    y+=20
+
+    // ══════════════════════════════════════════════════════════
+    // TABELA DE PROVENTOS
+    // ══════════════════════════════════════════════════════════
+    box(mg, y, cW, 7, '#F0FDF4', '#BBF7D0', 1)
+    box(mg, y, 3, 7, '#059669', undefined, 0)
+    txt('PROVENTOS', mg+6, y+4.8, {size:7.5,bold:true,color:'#065F46'})
+    txt('REFERÊNCIA', mg+cW*0.55, y+4.8, {size:6.5,bold:true,color:'#64748B'})
+    txt('VALOR (R$)', mg+cW-2, y+4.8, {size:6.5,bold:true,color:'#064E3B',align:'right'})
+    y+=9
+
+    const earn:[string,string,string][]=[
+      ['Salário / Horas Trabalhadas', `${fmtH(pay.totalMs)} · ${pay.daysWorked} dia(s)`, fmt(pay.regularValue)]
+    ]
+    Object.entries(pay.overtimeByRate).sort(([a],[b])=>Number(a)-Number(b)).forEach(([r,ms])=>{
+      const hv=emp.payType==='hour'?emp.payValue:emp.payValue/emp.hoursPerDay
+      earn.push([`Hora Extra (+${r}%)`, fmtH(ms as number), fmt((ms as number)/3600000*hv*(1+Number(r)/100))])
+    })
+    if(pay.nightMs>0) earn.push(['Adicional Noturno (20%)', fmtH(pay.nightMs), fmt(pay.nightBonus)])
+    ;(emp.gratifications||[]).forEach(g=>earn.push([`Gratificação — ${g.reason}`, g.date, fmt(g.value)]))
+
+    earn.forEach((row,i)=>{
+      box(mg, y, cW, 7.5, i%2===0?'#F8FAFC':'#FFFFFF', undefined, 0)
+      line(mg, y, mg+cW, '#E2E8F0')
+      txt(row[0], mg+5, y+5, {size:8,color:'#334155'})
+      txt(row[1], mg+cW*0.55, y+5, {size:7.5,color:'#64748B'})
+      txt(row[2], mg+cW-3, y+5, {size:8,bold:true,color:'#059669',align:'right'})
+      y+=7.5
+    })
+    line(mg, y, mg+cW, '#E2E8F0')
+
+    // Total proventos
+    box(mg, y, cW, 9, '#DCFCE7', '#86EFAC', 0)
+    txt('TOTAL DE PROVENTOS', mg+5, y+6, {size:8.5,bold:true,color:'#14532D'})
+    txt(fmt(pay.grossValue), mg+cW-3, y+6, {size:10,bold:true,color:'#15803D',align:'right'})
+    y+=14
+
+    // ══════════════════════════════════════════════════════════
+    // TABELA DE DESCONTOS
+    // ══════════════════════════════════════════════════════════
+    box(mg, y, cW, 7, '#FFF1F2', '#FECDD3', 1)
+    box(mg, y, 3, 7, '#E11D48', undefined, 0)
+    txt('DESCONTOS', mg+6, y+4.8, {size:7.5,bold:true,color:'#881337'})
+    txt('DATA', mg+cW*0.55, y+4.8, {size:6.5,bold:true,color:'#64748B'})
+    txt('VALOR (R$)', mg+cW-2, y+4.8, {size:6.5,bold:true,color:'#881337',align:'right'})
+    y+=9
+
+    const fgtsV=emp.fgts?pay.grossValue*0.08:0
+    const ded:[string,string,string][]=[...( emp.discounts||[]).map(d=>[d.reason,d.date,fmt(d.value)] as [string,string,string])]
+    if(emp.fgts) ded.push(['FGTS (8% sobre bruto)', '—', fmt(fgtsV)])
+
+    if(ded.length===0){
+      box(mg, y, cW, 9, '#FFF8F8', undefined, 0)
+      txt('Nenhum desconto nesta competência.', mg+cW/2, y+6, {size:8,color:'#94A3B8',italic:true,align:'center'})
+      y+=9
+    } else {
+      ded.forEach((row,i)=>{
+        box(mg, y, cW, 7.5, i%2===0?'#FFF8F8':'#FFFFFF', undefined, 0)
+        line(mg, y, mg+cW, '#FDE8EC')
+        txt(row[0], mg+5, y+5, {size:8,color:'#334155'})
+        txt(row[1], mg+cW*0.55, y+5, {size:7.5,color:'#64748B'})
+        txt(`- ${row[2]}`, mg+cW-3, y+5, {size:8,bold:true,color:'#E11D48',align:'right'})
+        y+=7.5
+      })
+      line(mg, y, mg+cW, '#FECDD3')
+    }
+
+    // Total descontos
+    box(mg, y, cW, 9, '#FFE4E6', '#FECDD3', 0)
+    txt('TOTAL DE DESCONTOS', mg+5, y+6, {size:8.5,bold:true,color:'#881337'})
+    txt(`- ${fmt(pay.totalDeductions+fgtsV)}`, mg+cW-3, y+6, {size:10,bold:true,color:'#E11D48',align:'right'})
+    y+=14
+
+    // ══════════════════════════════════════════════════════════
+    // PAINEL LÍQUIDO — destaque principal
+    // ══════════════════════════════════════════════════════════
+    // Fundo com gradiente simulado (2 retângulos)
+    box(mg, y, cW, 22, '#1E3A5F', undefined, 2)
+    box(mg, y, cW*0.55, 22, '#0F2444', undefined, 2)
+    box(mg, y, 4, 22, '#5B4CF5', undefined, 0)
+    vline(mg+cW*0.55, y+3, y+19, '#2563EB', 0.4)
+
+    txt('VALOR LÍQUIDO A RECEBER', mg+8, y+8, {size:8,bold:true,color:'#93C5FD'})
+    txt(fmt(pay.net-fgtsV), mg+8, y+17, {size:16,bold:true,color:'#FFFFFF'})
+
+    // Mini breakdown no lado direito
+    const bkX=mg+cW*0.55+5
+    txt('Bruto', bkX, y+7, {size:6.5,color:'#94A3B8'})
+    txt(fmt(pay.grossValue), bkX+32, y+7, {size:7,bold:true,color:'#BFDBFE',align:'right'})
+    txt('Descontos', bkX, y+12, {size:6.5,color:'#94A3B8'})
+    txt(`- ${fmt(pay.totalDeductions+fgtsV)}`, bkX+32, y+12, {size:7,bold:true,color:'#FCA5A5',align:'right'})
+    line(bkX, y+14.5, mg+cW-4, '#2563EB', 0.3)
+    txt('Líquido', bkX, y+18.5, {size:7,bold:true,color:'#BFDBFE'})
+    txt(fmt(pay.net-fgtsV), bkX+32, y+18.5, {size:7.5,bold:true,color:'#6EE7B7',align:'right'})
+    y+=28
+
+    // ══════════════════════════════════════════════════════════
+    // ASSINATURAS
+    // ══════════════════════════════════════════════════════════
+    box(mg, y, cW, 28, '#F8FAFC', '#E2E8F0', 2)
+    txt('DECLARO TER RECEBIDO A IMPORTÂNCIA LÍQUIDA DESCRITA NESTE RECIBO, REFERENTE À COMPETÊNCIA INDICADA.',
+      W/2, y+6, {size:6.5,color:'#64748B',align:'center',italic:true})
+
+    const sigY=y+22, sigW=68
+    // Linha empregador
+    line(mg+8, sigY, mg+8+sigW, '#334155', 0.4)
+    txt(co?.name||'Empregador', mg+8+sigW/2, sigY+4, {size:7,color:'#475569',align:'center'})
+    txt('Assinatura do Empregador', mg+8+sigW/2, sigY+8, {size:6,color:'#94A3B8',align:'center'})
+    // Linha funcionário
+    line(mg+cW-sigW-8, sigY, mg+cW-8, '#334155', 0.4)
+    txt(emp.name, mg+cW-sigW/2-8, sigY+4, {size:7,color:'#475569',align:'center'})
+    txt('Assinatura do Funcionário', mg+cW-sigW/2-8, sigY+8, {size:6,color:'#94A3B8',align:'center'})
+    y+=34
+
+    // ══════════════════════════════════════════════════════════
+    // RODAPÉ
+    // ══════════════════════════════════════════════════════════
+    box(0, H-12, W, 12, '#0F172A')
+    box(0, H-12, 4, 12, '#5B4CF5')
+    txt('PontoApp — Sistema de Controle de Ponto', mg+6, H-5.5, {size:6.5,color:'#64748B'})
+    txt(`Documento gerado em ${new Date().toLocaleString('pt-BR')} · Página 1/1`, W-mg, H-5.5, {size:6,color:'#475569',align:'right'})
+
     jd.save(`Holerite_${emp.name.replace(/\s+/g,'_')}_${hm}.pdf`)
   }
 
