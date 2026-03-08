@@ -647,7 +647,7 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
                 </div>
               </div>
               <div style={{display:'flex',alignItems:'center',gap:8}}>
-                <button onClick={toggle} style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:20,padding:'5px 10px',cursor:'pointer',fontSize:13,display:'flex',alignItems:'center',gap:5,fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.inkMid}}><span>{dark?'🌙':'☀️'}</span></button>
+                <button onClick={toggle} style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:20,padding:'5px 10px',cursor:'pointer',display:'flex',alignItems:'center',gap:5,fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.inkMid}}><span>{dark?'🌙':'☀️'}</span></button>
                 <div style={{textAlign:'right'}}>
                   <div style={{fontFamily:C.ff,fontSize:20,fontWeight:700,color:C.brand,letterSpacing:'-0.02em'}}>{fmtT(now)}</div>
                   <div style={{fontFamily:C.fb,fontSize:10,color:C.inkLight,marginTop:1}}>{new Date().toLocaleDateString('pt-BR',{weekday:'short',day:'2-digit',month:'short'})}</div>
