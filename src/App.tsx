@@ -30,34 +30,34 @@ if (!document.getElementById('pf')) {
   document.head.appendChild(s)
 }
 
-// ─── Tokens ──────────────────────────────────────────────────────────────────
-const C = {
-  bg:        '#F7F8FC',
-  bgAlt:     '#FFFFFF',
-  surface:   '#FFFFFF',
-  ink:       '#0F172A',
-  inkMid:    '#475569',
-  inkLight:  '#94A3B8',
-  inkXLight: '#CBD5E1',
-  border:    '#E8EDF5',
-  borderMid: '#CBD5E1',
-  brand:     '#5B4CF5',        // deep violet — confident, premium
-  brandDk:   '#4338CA',
-  brandLt:   '#EEF0FD',
-  brandGlow: 'rgba(91,76,245,.18)',
-  emerald:   '#059669',
-  emeraldLt: '#D1FAE5',
-  amber:     '#D97706',
-  amberLt:   '#FEF3C7',
-  rose:      '#E11D48',
-  roseLt:    '#FFE4E6',
-  sky:       '#0369A1',
-  skyLt:     '#E0F2FE',
-  gold:      '#B45309',
-  goldLt:    '#FEF9C3',
-  ff:        "'Fraunces', Georgia, serif",
-  fb:        "'Plus Jakarta Sans', system-ui, sans-serif",
+// ─── Theme System ─────────────────────────────────────────────────────────────
+import { createContext, useContext } from 'react'
+
+const LIGHT_TOKENS = {
+  bg:'#F7F8FC', bgAlt:'#FFFFFF', surface:'#FFFFFF', ink:'#0F172A',
+  inkMid:'#475569', inkLight:'#94A3B8', inkXLight:'#CBD5E1',
+  border:'#E8EDF5', borderMid:'#CBD5E1',
 }
+const DARK_TOKENS = {
+  bg:'#0F1117', bgAlt:'#161B27', surface:'#1E2433', ink:'#F1F5F9',
+  inkMid:'#94A3B8', inkLight:'#475569', inkXLight:'#334155',
+  border:'#2A3148', borderMid:'#3B4563',
+}
+const FIXED = {
+  brand:'#5B4CF5', brandDk:'#4338CA', brandLt:'#EEF0FD', brandGlow:'rgba(91,76,245,.18)',
+  emerald:'#059669', emeraldLt:'#D1FAE5', amber:'#D97706', amberLt:'#FEF3C7',
+  rose:'#E11D48', roseLt:'#FFE4E6', sky:'#0369A1', skyLt:'#E0F2FE',
+  gold:'#B45309', goldLt:'#FEF9C3',
+  ff:"'Fraunces', Georgia, serif", fb:"'Plus Jakarta Sans', system-ui, sans-serif",
+}
+type Tokens = typeof LIGHT_TOKENS & typeof FIXED
+const mkTokens = (dark: boolean): Tokens => ({...(dark ? DARK_TOKENS : LIGHT_TOKENS), ...FIXED})
+const ThemeCtx = createContext<{dark:boolean;toggle:()=>void;C:Tokens}>({
+  dark:false, toggle:()=>{}, C:mkTokens(false)
+})
+const useTheme = () => useContext(ThemeCtx)
+// Module-level C used by non-React helpers; components use useTheme().C
+const C: Tokens = mkTokens(false)
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 const fmt    = (v: number) => v.toLocaleString('pt-BR',{style:'currency',currency:'BRL'})
@@ -93,6 +93,7 @@ function Chip({children,color=C.brand,bg=C.brandLt}:{children:React.ReactNode;co
 }
 
 function Dot({status}:{status:string}){
+  const {C}=useTheme()
   return (
     <span style={{display:'inline-flex',alignItems:'center',gap:6}}>
       <span style={{width:7,height:7,borderRadius:'50%',background:sColor[status],boxShadow:status===STATUS.IN?`0 0 0 3px ${C.emeraldLt}`:undefined,display:'inline-block'}}/>
@@ -105,6 +106,7 @@ function Input({label,type='text',value,onChange,placeholder,error,hint,autoFocu
   label?:string;type?:string;value:string;onChange:(v:string)=>void;placeholder?:string;error?:string;hint?:string;autoFocus?:boolean
 }){
   const [show,setShow]=useState(false)
+  const {C}=useTheme()
   return (
     <div style={{marginBottom:16}}>
       {label&&<div style={{fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:'0.06em',textTransform:'uppercase',marginBottom:7}}>{label}</div>}
@@ -125,6 +127,7 @@ function Input({label,type='text',value,onChange,placeholder,error,hint,autoFocu
 function Btn({children,onClick,variant='brand',full,sm,disabled}:{
   children:React.ReactNode;onClick:()=>void;variant?:'brand'|'ghost'|'danger'|'success'|'outline';full?:boolean;sm?:boolean;disabled?:boolean
 }){
+  const {C}=useTheme()
   const v:{[k:string]:{bg:string;color:string;border:string;shadow?:string}} = {
     brand:   {bg:`linear-gradient(135deg,${C.brand},${C.brandDk})`,color:'#fff',border:'transparent',shadow:`0 4px 14px ${C.brandGlow}`},
     ghost:   {bg:'transparent',color:C.inkMid,border:C.border},
@@ -141,10 +144,12 @@ function Btn({children,onClick,variant='brand',full,sm,disabled}:{
 }
 
 function Card({children,style,pad=20}:{children:React.ReactNode;style?:object;pad?:number}){
+  const {C}=useTheme()
   return <div style={{background:C.surface,borderRadius:18,border:`1px solid ${C.border}`,boxShadow:'0 1px 4px rgba(15,23,42,.04)',padding:pad,...style}}>{children}</div>
 }
 
 function Stat({label,val,sub,color=C.brand}:{label:string;val:string;sub?:string;color?:string}){
+  const {C}=useTheme()
   return (
     <div style={{flex:1,padding:'12px 8px',background:C.bg,borderRadius:12,textAlign:'center'}}>
       <div style={{fontFamily:C.fb,fontSize:10,color:C.inkLight,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4}}>{label}</div>
@@ -155,6 +160,7 @@ function Stat({label,val,sub,color=C.brand}:{label:string;val:string;sub?:string
 }
 
 function NavBar({tabs,active,onSelect}:{tabs:{key:string;icon:string;label:string}[];active:string;onSelect:(k:string)=>void}){
+  const {C}=useTheme()
   return (
     <div style={{display:'flex',padding:'8px 8px 12px',gap:2,background:C.surface,borderTop:`1px solid ${C.border}`}}>
       {tabs.map(t=>{
@@ -170,27 +176,10 @@ function NavBar({tabs,active,onSelect}:{tabs:{key:string;icon:string;label:strin
   )
 }
 
-// ─── DARK TOKENS ─────────────────────────────────────────────────────────────
-const DARK = {
-  bg:        '#0F1117',
-  bgAlt:     '#161B27',
-  surface:   '#1E2433',
-  ink:       '#F1F5F9',
-  inkMid:    '#94A3B8',
-  inkLight:  '#475569',
-  inkXLight: '#334155',
-  border:    '#2A3148',
-  borderMid: '#3B4563',
-}
-
 // ─── COMPANY SELECT ───────────────────────────────────────────────────────────
 function CompanySelectScreen({onSelect}:{onSelect:(slug:string)=>void}){
   const [v,setV]=useState(''); const [err,setErr]=useState(''); const [load,setLoad]=useState(false)
-  const [dark,setDark]=useState(()=>localStorage.getItem('pontoTheme')==='dark')
-
-  const T = dark ? {...C, bg:DARK.bg, bgAlt:DARK.bgAlt, surface:DARK.surface, ink:DARK.ink, inkMid:DARK.inkMid, inkLight:DARK.inkLight, inkXLight:DARK.inkXLight, border:DARK.border, borderMid:DARK.borderMid} : C
-
-  const toggleTheme=()=>{ const next=!dark; setDark(next); localStorage.setItem('pontoTheme',next?'dark':'light') }
+  const {dark,toggle,C}=useTheme()
 
   const go=async()=>{
     const slug=v.trim().toLowerCase()
@@ -203,47 +192,38 @@ function CompanySelectScreen({onSelect}:{onSelect:(slug:string)=>void}){
     }catch{setErr('Erro ao conectar. Tente novamente.');setLoad(false)}
   }
   return (
-    <div style={{minHeight:'100vh',background:dark?`linear-gradient(160deg, #1a1f35 0%, ${DARK.bg} 40%, #0a0d16 100%)`:`linear-gradient(160deg, ${C.brandLt} 0%, #F0F4FF 40%, ${C.bg} 100%)`,display:'flex',justifyContent:'center',fontFamily:C.fb,position:'relative',overflow:'hidden',transition:'background .3s'}}>
-      {/* Decorative circles */}
-      <div style={{position:'absolute',top:-120,right:-80,width:400,height:400,borderRadius:'50%',background:`radial-gradient(circle, ${C.brand}${dark?'20':'12'}, transparent 70%)`,pointerEvents:'none'}}/>
-      <div style={{position:'absolute',bottom:-60,left:-60,width:300,height:300,borderRadius:'50%',background:`radial-gradient(circle, ${C.emerald}${dark?'15':'10'}, transparent 70%)`,pointerEvents:'none'}}/>
+    <div style={{minHeight:'100vh',background:dark?`linear-gradient(160deg,#1a1f35 0%,${DARK_TOKENS.bg} 40%,#0a0d16 100%)`:`linear-gradient(160deg,${C.brandLt} 0%,#F0F4FF 40%,${C.bg} 100%)`,display:'flex',justifyContent:'center',fontFamily:C.fb,position:'relative',overflow:'hidden',transition:'background .3s'}}>
+      <div style={{position:'absolute',top:-120,right:-80,width:400,height:400,borderRadius:'50%',background:`radial-gradient(circle,${C.brand}${dark?'20':'12'},transparent 70%)`,pointerEvents:'none'}}/>
+      <div style={{position:'absolute',bottom:-60,left:-60,width:300,height:300,borderRadius:'50%',background:`radial-gradient(circle,${C.emerald}${dark?'15':'10'},transparent 70%)`,pointerEvents:'none'}}/>
 
       {/* Theme Toggle */}
-      <button onClick={toggleTheme} style={{position:'absolute',top:20,right:20,zIndex:10,background:dark?DARK.surface:C.surface,border:`1.5px solid ${dark?DARK.border:C.border}`,borderRadius:50,padding:'8px 16px',cursor:'pointer',display:'flex',alignItems:'center',gap:8,fontFamily:C.fb,fontSize:12,fontWeight:700,color:dark?DARK.ink:C.inkMid,boxShadow:'0 2px 12px rgba(0,0,0,.12)',transition:'all .25s'}}>
-        <span style={{fontSize:16,transition:'transform .3s',display:'inline-block',transform:dark?'rotate(0deg)':'rotate(20deg)'}}>{dark?'🌙':'☀️'}</span>
+      <button onClick={toggle} style={{position:'absolute',top:20,right:20,zIndex:10,background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:50,padding:'8px 16px',cursor:'pointer',display:'flex',alignItems:'center',gap:8,fontFamily:C.fb,fontSize:12,fontWeight:700,color:C.inkMid,boxShadow:'0 2px 12px rgba(0,0,0,.12)',transition:'all .25s'}}>
+        <span style={{fontSize:16}}>{dark?'🌙':'☀️'}</span>
         <span>{dark?'Escuro':'Claro'}</span>
       </button>
 
       <div style={{width:'100%',maxWidth:420,display:'flex',flexDirection:'column',justifyContent:'center',padding:'40px 24px',position:'relative',zIndex:1}}>
         <div style={{textAlign:'center',marginBottom:44,animation:"fadeUp .35s cubic-bezier(.22,1,.36,1) both"}}>
           <div style={{display:'inline-flex',alignItems:'center',justifyContent:'center',width:76,height:76,borderRadius:24,background:`linear-gradient(135deg,${C.brand},${C.brandDk})`,boxShadow:`0 8px 32px ${C.brandGlow}`,marginBottom:22}}>
-            <span style={{fontSize:34,filter:'grayscale(0)'}}>⏱</span>
+            <span style={{fontSize:34}}>⏱</span>
           </div>
-          <div style={{fontFamily:C.ff,fontSize:34,fontWeight:900,color:T.ink,letterSpacing:'-0.03em',lineHeight:1.1,transition:'color .3s'}}>PontoApp</div>
-          <div style={{fontFamily:C.fb,fontSize:14,color:T.inkMid,marginTop:8,fontWeight:400,fontStyle:'italic',transition:'color .3s'}}>Controle de ponto inteligente</div>
+          <div style={{fontFamily:C.ff,fontSize:34,fontWeight:900,color:C.ink,letterSpacing:'-0.03em',lineHeight:1.1}}>PontoApp</div>
+          <div style={{fontFamily:C.fb,fontSize:14,color:C.inkMid,marginTop:8,fontWeight:400,fontStyle:'italic'}}>Controle de ponto inteligente</div>
         </div>
 
-        <div style={{background:T.surface,borderRadius:18,border:`1px solid ${T.border}`,boxShadow:dark?'0 8px 40px rgba(0,0,0,.4)':'0 8px 40px rgba(91,76,245,.10)',padding:20,animation:'fadeUp .4s .1s cubic-bezier(.22,1,.36,1) both',transition:'background .3s, border-color .3s'}}>
+        <Card style={{boxShadow:dark?'0 8px 40px rgba(0,0,0,.4)':'0 8px 40px rgba(91,76,245,.10)',animation:'fadeUp .4s .1s cubic-bezier(.22,1,.36,1) both'}}>
           <div style={{marginBottom:22}}>
-            <div style={{fontFamily:C.ff,fontSize:20,fontWeight:700,color:T.ink,marginBottom:4,transition:'color .3s'}}>Acessar empresa</div>
-            <div style={{fontFamily:C.fb,fontSize:13,color:T.inkMid,transition:'color .3s'}}>Digite o código fornecido pelo seu gestor.</div>
+            <div style={{fontFamily:C.ff,fontSize:20,fontWeight:700,color:C.ink,marginBottom:4}}>Acessar empresa</div>
+            <div style={{fontFamily:C.fb,fontSize:13,color:C.inkMid}}>Digite o código fornecido pelo seu gestor.</div>
           </div>
-          <div style={{marginBottom:16}}>
-            <div style={{fontFamily:C.fb,fontSize:11,fontWeight:700,color:T.inkMid,letterSpacing:'0.06em',textTransform:'uppercase',marginBottom:7}}>Código da empresa</div>
-            <input autoFocus value={v} onChange={e=>setV(e.target.value)} onKeyDown={e=>e.key==='Enter'&&go()} placeholder="ex: minhaempresa"
-              style={{width:'100%',background:dark?DARK.bgAlt:C.bg,border:`1.5px solid ${err?C.rose:T.border}`,borderRadius:10,padding:'12px 14px',color:T.ink,fontSize:14,fontFamily:C.fb,outline:'none',transition:'all .2s'}}
-              onFocus={e=>{e.target.style.borderColor=err?C.rose:C.brand;e.target.style.boxShadow=`0 0 0 3px ${err?C.roseLt:C.brandGlow}`}}
-              onBlur={e=>{e.target.style.borderColor=err?C.rose:T.border;e.target.style.boxShadow='none'}}
-            />
-            {err&&<p style={{fontFamily:C.fb,fontSize:11,color:C.rose,margin:'5px 0 0',fontWeight:500}}>⚠ {err}</p>}
-          </div>
-          <button onClick={go} disabled={load} style={{width:'100%',padding:'15px',borderRadius:12,border:'none',background:load?T.border:`linear-gradient(135deg,${C.brand},${C.brandDk})`,color:load?T.inkLight:'#fff',fontSize:15,fontWeight:700,fontFamily:C.ff,cursor:load?'wait':'pointer',boxShadow:load?'none':`0 6px 24px ${C.brandGlow}`,letterSpacing:'0.01em',transition:'all .2s'}}>
+          <Input label="Código da empresa" value={v} onChange={setV} placeholder="ex: minhaempresa" error={err} autoFocus />
+          <button onClick={go} disabled={load} style={{width:'100%',padding:'15px',borderRadius:12,border:'none',background:load?C.border:`linear-gradient(135deg,${C.brand},${C.brandDk})`,color:load?C.inkLight:'#fff',fontSize:15,fontWeight:700,fontFamily:C.ff,cursor:load?'wait':'pointer',boxShadow:load?'none':`0 6px 24px ${C.brandGlow}`,letterSpacing:'0.01em',transition:'all .2s'}}>
             {load?'Verificando…':'Entrar →'}
           </button>
-        </div>
+        </Card>
 
         <div style={{textAlign:'center',marginTop:20}}>
-          <button onClick={()=>onSelect('__superadmin__')} style={{background:'none',border:'none',cursor:'pointer',fontFamily:C.fb,fontSize:12,color:T.inkXLight}}>Acesso administrativo</button>
+          <button onClick={()=>onSelect('__superadmin__')} style={{background:'none',border:'none',cursor:'pointer',fontFamily:C.fb,fontSize:12,color:C.inkXLight}}>Acesso administrativo</button>
         </div>
       </div>
     </div>
@@ -252,6 +232,7 @@ function CompanySelectScreen({onSelect}:{onSelect:(slug:string)=>void}){
 
 // ─── SUPER ADMIN SCREEN ───────────────────────────────────────────────────────
 function SuperAdminScreen({onLogout}:{onLogout:()=>void}){
+  const {C}=useTheme()
   const [companies,setCompanies]=useState<CompanyMeta[]>([])
   const [view,setView]=useState<'list'|'new'>('list')
   const [form,setForm]=useState({slug:'',name:'',adminUsername:'',adminPassword:''})
@@ -379,10 +360,11 @@ function SuperAdminScreen({onLogout}:{onLogout:()=>void}){
 // ─── SUPER ADMIN LOGIN ────────────────────────────────────────────────────────
 function SuperAdminLogin({onLogout}:{onLogout:()=>void}){
   const [u,setU]=useState('');const [p,setP]=useState('');const [err,setErr]=useState('');const [ok,setOk]=useState(false)
+  const {dark,C}=useTheme()
   const login=()=>{ if(u===SUPER_ADMIN.username&&p===SUPER_ADMIN.password){setOk(true);setErr('')}else setErr('Credenciais incorretas.') }
   if(ok) return <SuperAdminScreen onLogout={onLogout}/>
   return (
-    <div style={{minHeight:'100vh',background:`linear-gradient(160deg,${C.goldLt},${C.bg} 50%)`,display:'flex',justifyContent:'center',fontFamily:C.fb}}>
+    <div style={{minHeight:'100vh',background:dark?`linear-gradient(160deg,${DARK_TOKENS.bg},#1a0f00 50%)`:`linear-gradient(160deg,${C.goldLt},${C.bg} 50%)`,display:'flex',justifyContent:'center',fontFamily:C.fb}}>
       <div style={{width:'100%',maxWidth:420,display:'flex',flexDirection:'column',justifyContent:'center',padding:'40px 24px'}}>
         <div style={{textAlign:'center',marginBottom:36,animation:"fadeUp .35s cubic-bezier(.22,1,.36,1) both"}}>
           <div style={{fontSize:52,marginBottom:14}}>🛡</div>
@@ -408,13 +390,26 @@ function SuperAdminLogin({onLogout}:{onLogout:()=>void}){
 export default function PontoApp(){
   const [slug,setSlug]=useState<string|null>(null)
   const [sa,setSa]=useState(false)
-  if(!slug) return <CompanySelectScreen onSelect={s=>{ if(s==='__superadmin__'){setSa(true);setSlug('__superadmin__')}else setSlug(s) }}/>
-  if(sa) return <SuperAdminLogin onLogout={()=>{setSlug(null);setSa(false)}}/>
-  return <CompanyApp slug={slug} onLogout={()=>setSlug(null)}/>
+  const [dark,setDark]=useState(()=>localStorage.getItem('pontoTheme')==='dark')
+
+  const toggle=()=>{ const next=!dark; setDark(next); localStorage.setItem('pontoTheme',next?'dark':'light') }
+  const themeVal={dark,toggle,C:mkTokens(dark)}
+
+  return (
+    <ThemeCtx.Provider value={themeVal}>
+      {!slug
+        ? <CompanySelectScreen onSelect={s=>{ if(s==='__superadmin__'){setSa(true);setSlug('__superadmin__')}else setSlug(s) }}/>
+        : sa
+          ? <SuperAdminLogin onLogout={()=>{setSlug(null);setSa(false)}}/>
+          : <CompanyApp slug={slug} onLogout={()=>setSlug(null)}/>
+      }
+    </ThemeCtx.Provider>
+  )
 }
 
 // ─── COMPANY APP ──────────────────────────────────────────────────────────────
 function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
+  const {dark,toggle,C}=useTheme()
   const [now,setNow]=useState(new Date())
   const [meta,setMeta]=useState<CompanyMeta|null>(null)
   const [user,setUser]=useState<User|null>(null)
@@ -597,9 +592,13 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
 
   // ─── LOGIN ─────────────────────────────────────────────────────────────────
   if(!user) return (
-    <div style={{minHeight:'100vh',background:`linear-gradient(160deg, #EEF0FD 0%, #F7F8FC 50%, #ECFDF5 100%)`,display:'flex',justifyContent:'center',fontFamily:C.fb,position:'relative',overflow:'hidden'}}>
+    <div style={{minHeight:'100vh',background:dark?`linear-gradient(160deg,${DARK_TOKENS.bg} 0%,#0d1525 50%,#0a1a0f 100%)`:`linear-gradient(160deg,#EEF0FD 0%,#F7F8FC 50%,#ECFDF5 100%)`,display:'flex',justifyContent:'center',fontFamily:C.fb,position:'relative',overflow:'hidden'}}>
       <div style={{position:'absolute',top:'8%',right:'-80px',width:320,height:320,borderRadius:'50%',background:`radial-gradient(circle,${C.brand}10,transparent 70%)`,pointerEvents:'none'}}/>
       <div style={{position:'absolute',bottom:'5%',left:'-60px',width:280,height:280,borderRadius:'50%',background:`radial-gradient(circle,${C.emerald}08,transparent 70%)`,pointerEvents:'none'}}/>
+      {/* Theme toggle on login */}
+      <button onClick={toggle} style={{position:'absolute',top:20,right:20,zIndex:10,background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:50,padding:'7px 14px',cursor:'pointer',display:'flex',alignItems:'center',gap:7,fontFamily:C.fb,fontSize:12,fontWeight:700,color:C.inkMid,boxShadow:'0 2px 12px rgba(0,0,0,.12)'}}>
+        <span style={{fontSize:15}}>{dark?'🌙':'☀️'}</span><span>{dark?'Escuro':'Claro'}</span>
+      </button>
       <div style={{width:'100%',maxWidth:420,display:'flex',flexDirection:'column',justifyContent:'center',padding:'40px 24px',position:'relative',zIndex:1}}>
         <button onClick={onLogout} style={{alignSelf:'flex-start',background:'none',border:'none',cursor:'pointer',fontFamily:C.fb,fontSize:12,color:C.inkLight,marginBottom:36}}>← Trocar empresa</button>
         <div style={{textAlign:'center',marginBottom:36,animation:"fadeUp .35s cubic-bezier(.22,1,.36,1) both"}}>
@@ -647,9 +646,12 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
                   <Dot status={est.status}/>
                 </div>
               </div>
-              <div style={{textAlign:'right'}}>
-                <div style={{fontFamily:C.ff,fontSize:20,fontWeight:700,color:C.brand,letterSpacing:'-0.02em'}}>{fmtT(now)}</div>
-                <div style={{fontFamily:C.fb,fontSize:10,color:C.inkLight,marginTop:1}}>{new Date().toLocaleDateString('pt-BR',{weekday:'short',day:'2-digit',month:'short'})}</div>
+              <div style={{display:'flex',alignItems:'center',gap:8}}>
+                <button onClick={toggle} style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:20,padding:'5px 10px',cursor:'pointer',fontSize:13,display:'flex',alignItems:'center',gap:5,fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.inkMid}}><span>{dark?'🌙':'☀️'}</span></button>
+                <div style={{textAlign:'right'}}>
+                  <div style={{fontFamily:C.ff,fontSize:20,fontWeight:700,color:C.brand,letterSpacing:'-0.02em'}}>{fmtT(now)}</div>
+                  <div style={{fontFamily:C.fb,fontSize:10,color:C.inkLight,marginTop:1}}>{new Date().toLocaleDateString('pt-BR',{weekday:'short',day:'2-digit',month:'short'})}</div>
+                </div>
               </div>
             </div>
           </div>
@@ -777,6 +779,7 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
             </div>
           </div>
           <div style={{display:'flex',alignItems:'center',gap:8}}>
+            <button onClick={toggle} style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:20,padding:'5px 10px',cursor:'pointer',display:'flex',alignItems:'center',gap:5,fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.inkMid}}><span>{dark?'🌙':'☀️'}</span></button>
             <div style={{fontFamily:C.ff,fontSize:16,fontWeight:700,color:C.brand,background:C.brandLt,borderRadius:10,padding:'5px 12px'}}>{fmtT(now)}</div>
             <Btn sm variant="ghost" onClick={logout}>Sair</Btn>
           </div>
