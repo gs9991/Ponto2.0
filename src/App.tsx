@@ -80,7 +80,7 @@ const tColor: Record<string,string>  = {entrada:C.emerald,saida:C.rose,inicio_pa
 interface Discount   { id:number;value:number;reason:string;date:string }
 interface Company    { name:string;cnpj:string;address:string;phone:string;email:string;logo:string }
 interface CompanyMeta{ slug:string;name:string;adminUsername:string;adminPassword:string;createdAt:string }
-interface Employee   { id:number;name:string;role:string;username:string;password:string;avatar:string;payType:'month'|'day'|'hour';payValue:number;hoursPerDay:number;overtimeRate:50|70|100;discounts:Discount[];gratifications:Discount[];cpf?:string;admission?:string;fgts?:boolean;inss?:boolean;irrf?:boolean;regime?:'clt'|'pj'|'avulso';companySlug:string }
+interface Employee   { id:number;name:string;role:string;username:string;password:string;avatar:string;payType:'month'|'day'|'hour';payValue:number;hoursPerDay:number;overtimeRate:50|70|100;discounts:Discount[];gratifications:Discount[];cpf?:string;admission?:string;fgts?:boolean;inss?:boolean;irrf?:boolean;regime?:'clt'|'pj'|'avulso';overtimeToBank?:boolean;companySlug:string }
 interface LogEntry   { type:string;time:Date }
 type AbsenceType = 'paid'|'unpaid'|'medical'|'justified'|'holiday'|'compensatory'|'bank_in'
 interface EmpState   { status:string;log:LogEntry[];workStart:Date|null;breakStart:Date|null;totalWork:number;totalBreak:number;days:string[];dailyWork:Record<string,number>;dailyOff:Record<string,AbsenceType>;dailyNight:Record<string,number>;dailyOvertimeRate:Record<string,number>;bankBalance:number }
@@ -560,7 +560,9 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
     // ── calcular horas normais, extras e banco ──
     let regMs=0, otR:Record<number,number>={}, bankCreditMs=0
     Object.entries(fd).forEach(([date,ms])=>{
-      if(fo[date]==='bank_in'){
+      const isBankDay=fo[date]==='bank_in'||emp.overtimeToBank
+      if(isBankDay){
+        // hora extra vai pro banco de horas, não gera pagamento adicional
         bankCreditMs+=Math.max(0,(ms as number)-jMs)
         regMs+=Math.min(ms as number,jMs)
       } else {
@@ -672,14 +674,14 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
   const saveEmp=async()=>{
     const e=valForm();if(Object.keys(e).length){setFErr(e);return}
     const ini=form.name.split(' ').map((w:string)=>w[0]).join('').slice(0,2).toUpperCase()
-    const data={name:form.name,role:form.role,username:form.username,avatar:ini,payType:form.payType as 'month'|'day'|'hour',payValue:Number(form.payValue),hoursPerDay:Number(form.hoursPerDay)||8,overtimeRate:Number(form.overtimeRate) as 50|70|100,cpf:form.cpf||'',admission:form.admission||'',regime:(form.regime||'clt') as 'clt'|'pj'|'avulso',fgts:form.fgts||false,inss:form.inss||false,irrf:form.irrf||false,companySlug:slug,...(form.password?{password:form.password}:{})}
+    const data={name:form.name,role:form.role,username:form.username,avatar:ini,payType:form.payType as 'month'|'day'|'hour',payValue:Number(form.payValue),hoursPerDay:Number(form.hoursPerDay)||8,overtimeRate:Number(form.overtimeRate) as 50|70|100,cpf:form.cpf||'',admission:form.admission||'',regime:(form.regime||'clt') as 'clt'|'pj'|'avulso',fgts:form.fgts||false,inss:form.inss||false,irrf:form.irrf||false,overtimeToBank:form.overtimeToBank||false,companySlug:slug,...(form.password?{password:form.password}:{})}
     if(editEmp){await setDoc(doc(db,ec,String(editEmp.id)),{...editEmp,...data});setOk('Funcionário atualizado!')}
     else{const id=Date.now();await setDoc(doc(db,ec,String(id)),{id,password:form.password,discounts:[],gratifications:[],...data});setOk('Funcionário cadastrado!')}
     setTimeout(()=>setOk(''),3000)
-    setForm({name:'',role:'',username:'',password:'',payType:'month',payValue:'',hoursPerDay:'8',overtimeRate:'50',cpf:'',admission:'',regime:'clt',fgts:true,inss:true,irrf:true});setFErr({});setEditEmp(null);setAv('list')
+    setForm({name:'',role:'',username:'',password:'',payType:'month',payValue:'',hoursPerDay:'8',overtimeRate:'50',cpf:'',admission:'',regime:'clt',fgts:true,inss:true,irrf:true,overtimeToBank:false});setFErr({});setEditEmp(null);setAv('list')
   }
   const delEmp=async(id:number)=>{await deleteDoc(doc(db,ec,String(id)));await deleteDoc(doc(db,rc,String(id)))}
-  const startEdit=(emp:Employee)=>{setEditEmp(emp);setForm({name:emp.name,role:emp.role,username:emp.username,password:'',payType:emp.payType,payValue:String(emp.payValue),hoursPerDay:String(emp.hoursPerDay),overtimeRate:String(emp.overtimeRate||50),cpf:emp.cpf||'',admission:emp.admission||'',regime:emp.regime||'clt',fgts:emp.fgts||false,inss:emp.inss||false,irrf:emp.irrf||false});setFErr({});setAv('edit')}
+  const startEdit=(emp:Employee)=>{setEditEmp(emp);setForm({name:emp.name,role:emp.role,username:emp.username,password:'',payType:emp.payType,payValue:String(emp.payValue),hoursPerDay:String(emp.hoursPerDay),overtimeRate:String(emp.overtimeRate||50),cpf:emp.cpf||'',admission:emp.admission||'',regime:emp.regime||'clt',fgts:emp.fgts||false,inss:emp.inss||false,irrf:emp.irrf||false,overtimeToBank:emp.overtimeToBank||false});setFErr({});setAv('edit')}
 
   const addDisc=async(eid:number)=>{setDerr('');if(!dform.value||isNaN(Number(dform.value))||Number(dform.value)<=0){setDerr('Valor inválido');return}if(!dform.reason.trim()){setDerr('Informe o motivo');return};const emp=employees.find(e=>e.id===eid);if(!emp)return;const d:Discount={id:Date.now(),value:Number(dform.value),reason:dform.reason.trim(),date:fmtDs(new Date())};await setDoc(doc(db,ec,String(eid)),{...emp,discounts:[...(emp.discounts||[]),d]});setDform({value:'',reason:''});setDtgt(null)}
   const remDisc=async(eid:number,did:number)=>{const emp=employees.find(e=>e.id===eid);if(!emp)return;await setDoc(doc(db,ec,String(eid)),{...emp,discounts:emp.discounts.filter(d=>d.id!==did)})}
@@ -698,7 +700,20 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
     await setDoc(doc(db,rc,String(eid)),{...st,bankBalance:newBalance,log:st.log.map(e=>({type:e.type,time:e.time.toISOString()})),workStart:st.workStart?st.workStart.toISOString():null,breakStart:st.breakStart?st.breakStart.toISOString():null})
   }
 
-  const saveHours=async(eid:number,date:string,h:number,m:number,otRate?:number)=>{const ms=(h*60+m)*60000,st=gs(eid),old=(st.dailyWork||{})[date]||0,diff=ms-old;const nDW={...(st.dailyWork||{}),[date]:ms},nTW=Math.max(0,(st.totalWork||0)+diff);let nd=[...(st.days||[])];if(ms>0&&!nd.includes(date))nd=[...nd,date];if(ms===0)nd=nd.filter(d=>d!==date);const nOT={...(st.dailyOvertimeRate||{})};if(otRate!==undefined)nOT[date]=otRate;await setDoc(doc(db,rc,String(eid)),{...st,dailyWork:nDW,totalWork:nTW,days:nd,dailyOvertimeRate:nOT,log:st.log.map(e=>({type:e.type,time:e.time.toISOString()})),workStart:st.workStart?st.workStart.toISOString():null,breakStart:st.breakStart?st.breakStart.toISOString():null});setEditDay(null);setEditH('');setEditMin('')}
+  const saveHours=async(eid:number,date:string,h:number,m:number,otRate?:number)=>{
+    const ms=(h*60+m)*60000,st=gs(eid),oldMs=(st.dailyWork||{})[date]||0,diff=ms-oldMs
+    const emp=employees.find(e=>e.id===eid)
+    const nDW={...(st.dailyWork||{}),[date]:ms},nTW=Math.max(0,(st.totalWork||0)+diff)
+    let nd=[...(st.days||[])];if(ms>0&&!nd.includes(date))nd=[...nd,date];if(ms===0)nd=nd.filter(d=>d!==date)
+    const nOT={...(st.dailyOvertimeRate||{})};if(otRate!==undefined)nOT[date]=otRate
+    // se funcionário tem banco de horas automático, credita hora extra no banco
+    const jMs=(emp?.hoursPerDay||8)*3600000
+    const oldOT=Math.max(0,oldMs-jMs), newOT=Math.max(0,ms-jMs)
+    const bankDelta=emp?.overtimeToBank?(newOT-oldOT):0
+    const newBank=Math.max(0,(st.bankBalance||0)+bankDelta)
+    await setDoc(doc(db,rc,String(eid)),{...st,dailyWork:nDW,totalWork:nTW,days:nd,dailyOvertimeRate:nOT,bankBalance:newBank,log:st.log.map(e=>({type:e.type,time:e.time.toISOString()})),workStart:st.workStart?st.workStart.toISOString():null,breakStart:st.breakStart?st.breakStart.toISOString():null})
+    setEditDay(null);setEditH('');setEditMin('')
+  }
 
   const genHolerite=async(emp:Employee,_st:EmpState,pay:ReturnType<typeof calcPay>,hm:string)=>{
     if(!(window as any).jspdf){await new Promise<void>((res,rej)=>{const s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';s.onload=()=>res();s.onerror=()=>rej();document.head.appendChild(s)})}
@@ -1215,7 +1230,7 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
                       <div style={{fontFamily:C.ff,fontSize:20,fontWeight:700,color:C.ink,letterSpacing:'-0.02em'}}>Equipe</div>
                       <div style={{fontFamily:C.fb,fontSize:12,color:C.inkMid,marginTop:2}}>{employees.length} funcionário{employees.length!==1?'s':''}</div>
                     </div>
-                    <Btn sm onClick={()=>{setForm({name:'',role:'',username:'',password:'',payType:'month',payValue:'',hoursPerDay:'8',overtimeRate:'50',cpf:'',admission:'',regime:'clt',fgts:true,inss:true,irrf:true});setFErr({});setEditEmp(null);setAv('new')}}>+ Novo</Btn>
+                    <Btn sm onClick={()=>{setForm({name:'',role:'',username:'',password:'',payType:'month',payValue:'',hoursPerDay:'8',overtimeRate:'50',cpf:'',admission:'',regime:'clt',fgts:true,inss:true,irrf:true,overtimeToBank:false});setFErr({});setEditEmp(null);setAv('new')}}>+ Novo</Btn>
                   </div>
 
                   {employees.length===0&&(
@@ -1284,10 +1299,21 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
 
                   <div style={{marginBottom:16}}>
                     <div style={{fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:'0.06em',textTransform:'uppercase',marginBottom:8}}>Hora extra padrão</div>
-                    <div style={{display:'flex',background:C.bg,borderRadius:10,padding:3,gap:3}}>
+                    <div style={{display:'flex',background:C.bg,borderRadius:10,padding:3,gap:3,marginBottom:10}}>
                       {['50','70','100'].map(r=>(
                         <button key={r} onClick={()=>setForm((f:any)=>({...f,overtimeRate:r}))} style={{flex:1,padding:'10px 0',borderRadius:8,border:'none',cursor:'pointer',fontFamily:C.fb,fontSize:13,fontWeight:700,background:form.overtimeRate===r?C.amber:C.bg,color:form.overtimeRate===r?'#fff':C.inkLight,transition:'all .2s'}}>+{r}%</button>
                       ))}
+                    </div>
+                    {/* Banco de horas automático */}
+                    <div onClick={()=>setForm((f:any)=>({...f,overtimeToBank:!f.overtimeToBank}))}
+                      style={{display:'flex',alignItems:'center',gap:12,padding:'12px 14px',background:form.overtimeToBank?'#EEF2FF':C.bg,borderRadius:10,border:`1.5px solid ${form.overtimeToBank?'#6366F1':C.border}`,cursor:'pointer',transition:'all .2s'}}>
+                      <div style={{width:20,height:20,borderRadius:6,background:form.overtimeToBank?'#6366F1':C.surface,border:`2px solid ${form.overtimeToBank?'#6366F1':C.borderMid}`,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,transition:'all .2s'}}>
+                        {form.overtimeToBank&&<span style={{color:'#fff',fontSize:13,lineHeight:1}}>✓</span>}
+                      </div>
+                      <div>
+                        <div style={{fontFamily:C.fb,fontSize:13,fontWeight:600,color:form.overtimeToBank?'#4338CA':C.inkMid}}>🏦 Horas extras vão para o banco</div>
+                        <div style={{fontFamily:C.fb,fontSize:11,color:form.overtimeToBank?'#6366F1':C.inkLight,marginTop:1}}>Não gera pagamento adicional — acumula saldo para folgas futuras</div>
+                      </div>
                     </div>
                   </div>
 
@@ -1363,7 +1389,7 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
                           <div style={{width:38,height:38,borderRadius:12,background:C.brandLt,border:`1.5px solid ${C.brand}20`,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:C.ff,fontSize:13,fontWeight:800,color:C.brand,flexShrink:0}}>{emp.avatar}</div>
                           <div>
                             <div style={{fontFamily:C.ff,fontSize:14,fontWeight:700,color:C.ink}}>{emp.name}</div>
-                            <div style={{fontFamily:C.fb,fontSize:11,color:C.inkLight}}>{emp.payType==='month'?fmt(emp.payValue)+'/mês':emp.payType==='hour'?fmt(emp.payValue)+'/h':fmt(emp.payValue)+'/dia'}{emp.regime&&emp.regime!=='clt'?' · '+emp.regime.toUpperCase():''}</div>
+                            <div style={{fontFamily:C.fb,fontSize:11,color:C.inkLight,display:'flex',alignItems:'center',gap:5}}><span>{emp.payType==='month'?fmt(emp.payValue)+'/mês':emp.payType==='hour'?fmt(emp.payValue)+'/h':fmt(emp.payValue)+'/dia'}{emp.regime&&emp.regime!=='clt'?' · '+emp.regime.toUpperCase():''}</span>{emp.overtimeToBank&&<span style={{background:'#EEF2FF',color:'#4338CA',fontSize:10,fontWeight:700,padding:'1px 6px',borderRadius:20}}>🏦 Banco HE</span>}</div>
                           </div>
                         </div>
                         <div style={{textAlign:'right'}}>
@@ -1526,7 +1552,7 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
                   <Card key={emp.id} style={{marginBottom:14,padding:0,overflow:'hidden'}}>
                     <div style={{padding:'12px 16px 10px',borderBottom:`1px solid ${C.border}`}}>
                       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:bankBal>0?8:0}}>
-                        <div style={{fontFamily:C.ff,fontSize:15,fontWeight:700,color:C.ink}}>{emp.name}</div>
+                        <div style={{display:'flex',alignItems:'center',gap:8}}><div style={{fontFamily:C.ff,fontSize:15,fontWeight:700,color:C.ink}}>{emp.name}</div>{emp.overtimeToBank&&<span style={{background:'#EEF2FF',color:'#4338CA',fontSize:10,fontWeight:700,padding:'2px 7px',borderRadius:20}}>🏦 HE → Banco</span>}</div>
                         <div style={{fontFamily:C.ff,fontSize:15,fontWeight:700,color:C.emerald}}>{fmtHM(mTotal)}</div>
                       </div>
                       {bankBal>0&&(
