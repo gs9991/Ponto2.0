@@ -190,7 +190,7 @@ function CompanySelectScreen({onSelect}:{onSelect:(slug:string)=>void}){
       <div style={{position:'absolute',bottom:-60,left:-60,width:300,height:300,borderRadius:'50%',background:`radial-gradient(circle, ${C.emerald}10, transparent 70%)`,pointerEvents:'none'}}/>
 
       <div style={{width:'100%',maxWidth:420,display:'flex',flexDirection:'column',justifyContent:'center',padding:'40px 24px',position:'relative',zIndex:1}}>
-        <div className="fade-up" style={{textAlign:'center',marginBottom:44}}>
+        <div style={{textAlign:'center',marginBottom:44,animation:"fadeUp .35s cubic-bezier(.22,1,.36,1) both"}}>
           <div style={{display:'inline-flex',alignItems:'center',justifyContent:'center',width:76,height:76,borderRadius:24,background:`linear-gradient(135deg,${C.brand},${C.brandDk})`,boxShadow:`0 8px 32px ${C.brandGlow}`,marginBottom:22}}>
             <span style={{fontSize:34,filter:'grayscale(0)'}}>⏱</span>
           </div>
@@ -267,7 +267,7 @@ function SuperAdminScreen({onLogout}:{onLogout:()=>void}){
         </div>
 
         <div style={{flex:1,overflowY:'auto',padding:'18px 16px 32px'}}>
-          {ok&&<div className="fade-up" style={{background:C.emeraldLt,border:`1px solid ${C.emerald}40`,borderRadius:12,padding:'12px 16px',marginBottom:14,fontFamily:C.fb,fontSize:13,color:C.emerald,fontWeight:600}}>✓ {ok}</div>}
+          {ok&&<div style={{background:C.emeraldLt,border:`1px solid ${C.emerald}40`,borderRadius:12,padding:'12px 16px',marginBottom:14,fontFamily:C.fb,fontSize:13,color:C.emerald,fontWeight:600,animation:"fadeUp .3s both"}}>✓ {ok}</div>}
 
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:18}}>
             <div style={{fontFamily:C.fb,fontSize:13,color:C.inkMid}}>{companies.length} empresa{companies.length!==1?'s':''} cadastrada{companies.length!==1?'s':''}</div>
@@ -275,7 +275,7 @@ function SuperAdminScreen({onLogout}:{onLogout:()=>void}){
           </div>
 
           {view==='new'&&(
-            <Card style={{marginBottom:16,border:`1px solid ${C.brand}30`}} className="fade-up">
+            <Card style={{marginBottom:16,border:`1px solid ${C.brand}30`,animation:"fadeUp .4s .1s cubic-bezier(.22,1,.36,1) both"}}>
               <div style={{fontFamily:C.ff,fontSize:18,fontWeight:700,color:C.ink,marginBottom:18}}>Nova empresa</div>
               <Input label="Nome da empresa" value={form.name} onChange={v=>{
                 const slug=v.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')
@@ -351,7 +351,7 @@ function SuperAdminLogin({onLogout}:{onLogout:()=>void}){
   return (
     <div style={{minHeight:'100vh',background:`linear-gradient(160deg,${C.goldLt},${C.bg} 50%)`,display:'flex',justifyContent:'center',fontFamily:C.fb}}>
       <div style={{width:'100%',maxWidth:420,display:'flex',flexDirection:'column',justifyContent:'center',padding:'40px 24px'}}>
-        <div className="fade-up" style={{textAlign:'center',marginBottom:36}}>
+        <div style={{textAlign:'center',marginBottom:36,animation:"fadeUp .35s cubic-bezier(.22,1,.36,1) both"}}>
           <div style={{fontSize:52,marginBottom:14}}>🛡</div>
           <div style={{fontFamily:C.ff,fontSize:26,fontWeight:800,color:C.ink,letterSpacing:'-0.02em'}}>Acesso Restrito</div>
           <div style={{fontFamily:C.fb,fontSize:13,color:C.inkMid,marginTop:4}}>Painel de super administrador</div>
@@ -569,7 +569,7 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
       <div style={{position:'absolute',bottom:'5%',left:'-60px',width:280,height:280,borderRadius:'50%',background:`radial-gradient(circle,${C.emerald}08,transparent 70%)`,pointerEvents:'none'}}/>
       <div style={{width:'100%',maxWidth:420,display:'flex',flexDirection:'column',justifyContent:'center',padding:'40px 24px',position:'relative',zIndex:1}}>
         <button onClick={onLogout} style={{alignSelf:'flex-start',background:'none',border:'none',cursor:'pointer',fontFamily:C.fb,fontSize:12,color:C.inkLight,marginBottom:36}}>← Trocar empresa</button>
-        <div className="fade-up" style={{textAlign:'center',marginBottom:36}}>
+        <div style={{textAlign:'center',marginBottom:36,animation:"fadeUp .35s cubic-bezier(.22,1,.36,1) both"}}>
           {co?.logo?(
             <img src={co.logo} alt="" style={{height:60,maxWidth:180,objectFit:'contain',borderRadius:12,marginBottom:16}}/>
           ):(
@@ -754,7 +754,7 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
           {/* ── EQUIPE ── */}
           {view==='list'&&(
             <>
-              {ok&&<div className="fade-up" style={{background:C.emeraldLt,border:`1px solid ${C.emerald}40`,borderRadius:12,padding:'12px 16px',marginBottom:14,fontFamily:C.fb,fontSize:13,color:C.emerald,fontWeight:600}}>✓ {ok}</div>}
+              {ok&&<div style={{background:C.emeraldLt,border:`1px solid ${C.emerald}40`,borderRadius:12,padding:'12px 16px',marginBottom:14,fontFamily:C.fb,fontSize:13,color:C.emerald,fontWeight:600,animation:"fadeUp .3s both"}}>✓ {ok}</div>}
 
               {av==='list'&&(
                 <>
