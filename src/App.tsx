@@ -1101,7 +1101,7 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
                 <button onClick={toggle} style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:20,padding:'5px 10px',cursor:'pointer',display:'flex',alignItems:'center',gap:5,fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.inkMid}}><span>{dark?'🌙':'☀️'}</span></button>
                 <div style={{textAlign:'right'}}>
                   <div style={{fontFamily:C.ff,fontSize:20,fontWeight:700,color:C.brand,letterSpacing:'-0.02em'}}>{fmtT(now)}</div>
-                  <div style={{fontFamily:C.fb,fontSize:10,color:C.inkLight,marginTop:1}}>{new Date().toLocaleDateString('pt-BR',{weekday:'short',day:'2-digit',month:'short'})}</div>
+                  <div style={{fontFamily:C.fb,fontSize:10,color:C.inkLight,marginTop:1}}>{['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'][new Date().getDay()]}, {new Date().toLocaleDateString('pt-BR',{day:'2-digit',month:'short'})}</div>
                 </div>
               </div>
             </div>
@@ -1464,7 +1464,7 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
                           {/* Descontos */}
                           <div style={{background:C.roseLt,borderRadius:12,padding:14,marginBottom:10,border:`1px solid ${C.rose}20`}}>
                             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
-                              <span style={{fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.rose,letterSpacing:'0.08em',textTransform:'uppercase'}}>Descontos</span>
+                              <span style={{fontFamily:C.fb,fontSize:12,fontWeight:700,color:C.rose}}>Descontos</span>
                               <button onClick={()=>{setDtgt(isAddD?null:emp.id);setDform({value:'',reason:''});setDerr('')}}
                                 style={{background:C.surface,border:`1px solid ${C.rose}30`,borderRadius:8,padding:'4px 10px',cursor:'pointer',fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.rose}}>
                                 {isAddD?'✕ Cancelar':'+ Desconto'}
@@ -1499,7 +1499,7 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
                           {/* Gratificações */}
                           <div style={{background:C.emeraldLt,borderRadius:12,padding:14,marginBottom:14,border:`1px solid ${C.emerald}20`}}>
                             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
-                              <span style={{fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.emerald,letterSpacing:'0.04em',textTransform:'uppercase'}}>Gratificações</span>
+                              <span style={{fontFamily:C.fb,fontSize:12,fontWeight:700,color:C.emerald}}>Gratificações</span>
                               <button onClick={()=>{setGtgt(isAddG?null:emp.id);setAddG(!isAddG);setGform({value:'',reason:''});setGerr('')}}
                                 style={{background:C.surface,border:`1px solid ${C.emerald}30`,borderRadius:8,padding:'4px 10px',cursor:'pointer',fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.emerald}}>
                                 {isAddG?'✕ Cancelar':'+ Gratificação'}
