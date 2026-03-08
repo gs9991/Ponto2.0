@@ -63,6 +63,8 @@ const C: Tokens = mkTokens(false)
 const fmt    = (v: number) => v.toLocaleString('pt-BR',{style:'currency',currency:'BRL'})
 const fmtT   = (d: Date)   => d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})
 const fmtD   = (d: Date)   => d.toLocaleDateString('pt-BR',{weekday:'long',day:'2-digit',month:'long',year:'numeric'})
+const DOW_ABBR=['Dom','Seg','Ter','Qua','Qui','Sex','Sáb']
+const fmtDow = (date:string) => DOW_ABBR[new Date(date+'T12:00:00').getDay()]
 const fmtDs  = (d: Date)   => d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric'})
 const fmtDur = (ms: number)=> { if(!ms||ms<0) return '00:00:00'; const t=Math.floor(ms/1000); return `${String(Math.floor(t/3600)).padStart(2,'0')}:${String(Math.floor((t%3600)/60)).padStart(2,'0')}:${String(t%60).padStart(2,'0')}` }
 const fmtH   = (ms: number)=> !ms||ms<0?'0.00h':(ms/3600000).toFixed(2)+'h'
@@ -489,6 +491,7 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
   const [geo,setGeo]=useState<{lat:number;lng:number;radius:number;address:string}|null>(null)
   const [geoF,setGeoF]=useState({address:'',radius:'100'})
   const [geoErr,setGeoErr]=useState('');const [geoOk,setGeoOk]=useState('');const [geoLoad,setGeoLoad]=useState(false)
+  const [livePos,setLivePos]=useState<{lat:number;lng:number;dist:number}|null>(null)
   const [blocked,setBlocked]=useState('');const [checking,setChecking]=useState(false)
   const [co,setCo]=useState<Company|null>(null)
   const [coForm,setCoForm]=useState({name:'',cnpj:'',address:'',phone:'',email:'',logo:''})
@@ -698,6 +701,29 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
     const st=gs(eid)
     const newBalance=Math.max(0,(st.bankBalance||0)-hoursMs)
     await setDoc(doc(db,rc,String(eid)),{...st,bankBalance:newBalance,log:st.log.map(e=>({type:e.type,time:e.time.toISOString()})),workStart:st.workStart?st.workStart.toISOString():null,breakStart:st.breakStart?st.breakStart.toISOString():null})
+  }
+
+  const exportBankHours=()=>{
+    // Monta CSV com todos os funcionários e saldo do banco de horas
+    const rows=[['Matrícula','Nome','Cargo','Regime','Tipo Pagamento','Salário','Banco de Horas (h)','Banco de Horas (min)','Banco de Horas Formatado']]
+    const sorted=[...employees].sort((a,b)=>a.id-b.id)
+    sorted.forEach((emp,i)=>{
+      const st=gs(emp.id)
+      const bank=st.bankBalance||0
+      const h=Math.floor(bank/3600000)
+      const m=Math.floor((bank%3600000)/60000)
+      const mat=String(i+1).padStart(3,'0')
+      rows.push([mat,emp.name,emp.role,emp.regime||'clt',emp.payType==='month'?'Mensal':emp.payType==='day'?'Diário':'Horário',String(emp.payValue),String(h),String(m),`${h}h${String(m).padStart(2,'0')}`])
+    })
+    const csv=rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')).join('
+')
+    const bom='﻿' // BOM para Excel reconhecer UTF-8
+    const blob=new Blob([bom+csv],{type:'text/csv;charset=utf-8;'})
+    const url=URL.createObjectURL(blob)
+    const a=document.createElement('a');a.href=url
+    const mes=new Date().toLocaleDateString('pt-BR',{month:'long',year:'numeric'})
+    a.download=`BancoHoras_${mes.replace(' ','_')}.csv`
+    a.click();URL.revokeObjectURL(url)
   }
 
   const saveHours=async(eid:number,date:string,h:number,m:number,otRate?:number)=>{
@@ -1118,7 +1144,7 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
                   <Card pad={16}>
                     <div style={{fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.inkLight,letterSpacing:'0.08em',textTransform:'uppercase',marginBottom:12}}>Últimos dias</div>
                     {Object.entries(est.dailyWork).sort(([a],[b])=>b.localeCompare(a)).slice(0,5).map(([date,ms])=>{
-                      const[,mo,d]=date.split('-');const dow=new Date(date+'T12:00:00').toLocaleDateString('pt-BR',{weekday:'short'})
+                      const[,mo,d]=date.split('-');const dow=fmtDow(date)
                       return (
                         <div key={date} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0',borderBottom:`1px solid ${C.border}`}}>
                           <div style={{display:'flex',alignItems:'center',gap:8}}>
@@ -1474,7 +1500,7 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
                           {/* Gratificações */}
                           <div style={{background:C.emeraldLt,borderRadius:12,padding:14,marginBottom:14,border:`1px solid ${C.emerald}20`}}>
                             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
-                              <span style={{fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.emerald,letterSpacing:'0.08em',textTransform:'uppercase'}}>Gratificações</span>
+                              <span style={{fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.emerald,letterSpacing:'0.04em',textTransform:'uppercase'}}>Gratificações</span>
                               <button onClick={()=>{setGtgt(isAddG?null:emp.id);setAddG(!isAddG);setGform({value:'',reason:''});setGerr('')}}
                                 style={{background:C.surface,border:`1px solid ${C.emerald}30`,borderRadius:8,padding:'4px 10px',cursor:'pointer',fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.emerald}}>
                                 {isAddG?'✕ Cancelar':'+ Gratificação'}
@@ -1531,6 +1557,13 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
                 </select>
               </div>
 
+              {/* Export banco de horas */}
+              <div style={{display:'flex',justifyContent:'flex-end',marginBottom:10}}>
+                <button onClick={exportBankHours} style={{display:'flex',alignItems:'center',gap:7,background:'#EEF2FF',border:'1px solid #6366F130',borderRadius:10,padding:'9px 14px',cursor:'pointer',fontFamily:C.fb,fontSize:12,fontWeight:700,color:'#4338CA'}}>
+                  📊 Exportar Banco de Horas (.csv)
+                </button>
+              </div>
+
               {/* Legenda de ausências */}
               <Card style={{marginBottom:12,padding:'10px 14px'}}>
                 <div style={{fontFamily:C.fb,fontSize:10,fontWeight:700,color:C.inkLight,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:8}}>Legenda de ocorrências</div>
@@ -1565,7 +1598,7 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
                     <div style={{padding:'8px 12px 12px'}}>
                       {days.map(date=>{
                         const ms=st.dailyWork[date]||0,off=st.dailyOff?.[date],isToday=date===TODAY(),[,mo,d]=date.split('-')
-                        const dow=new Date(date+'T12:00:00').toLocaleDateString('pt-BR',{weekday:'short'})
+                        const dow=fmtDow(date)
                         const isEd=editDay?.empId===emp.id&&editDay?.date===date
                         const absConf=off?ABSENCE_CONFIG[off]:null
                         const isWeekend=new Date(date+'T12:00:00').getDay()===0||new Date(date+'T12:00:00').getDay()===6
@@ -1573,7 +1606,7 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
                           <div key={date}>
                             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 10px',background:isToday?C.brandLt:isWeekend?C.bg:'transparent',borderRadius:9,marginBottom:2,border:isToday?`1px solid ${C.brand}20`:isWeekend?`1px solid ${C.border}`:'1px solid transparent',opacity:isWeekend&&!ms&&!off?0.5:1}}>
                               <div style={{display:'flex',alignItems:'center',gap:8,flex:1}}>
-                                <span style={{fontFamily:C.fb,fontSize:10,color:isWeekend?C.brand:C.inkLight,width:26,textTransform:'capitalize',fontWeight:isWeekend?700:400}}>{dow}</span>
+                                <span style={{fontFamily:C.fb,fontSize:10,color:isWeekend?C.brand:C.inkLight,width:26,fontWeight:isWeekend?700:400}}>{dow}</span>
                                 <span style={{fontFamily:C.fb,fontSize:13,color:C.inkMid,fontWeight:isToday?600:400}}>{d}/{mo}</span>
                                 {absConf&&<span style={{display:'inline-flex',alignItems:'center',gap:3,padding:'2px 7px',borderRadius:20,background:absConf.colorLt,color:absConf.color,fontSize:10,fontWeight:600,fontFamily:C.fb}}>{absConf.emoji} {absConf.label}</span>}
                               </div>
@@ -1627,18 +1660,48 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
               <Card style={{marginBottom:14,padding:0,overflow:'hidden',border:`1px solid ${geo?C.emerald+'40':C.border}`}}>
                 <div style={{height:3,background:geo?`linear-gradient(90deg,${C.emerald},${C.emerald}60)`:`linear-gradient(90deg,${C.border},${C.border})`}}/>
                 <div style={{padding:18,display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
-                  <div>
+                  <div style={{flex:1}}>
                     <Chip color={geo?C.emerald:C.inkLight} bg={geo?C.emeraldLt:C.bg}>{geo?'🟢 Cerca ativa':'🔴 Sem restrição'}</Chip>
                     {geo?(
                       <div style={{marginTop:10}}>
                         <div style={{fontFamily:C.ff,fontSize:14,fontWeight:600,color:C.ink,marginBottom:6}}>{geo.address}</div>
-                        <Chip color={C.sky} bg={C.skyLt}>📍 Raio: {geo.radius}m</Chip>
+                        <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:6}}>
+                          <Chip color={C.sky} bg={C.skyLt}>📍 Raio permitido: {geo.radius}m</Chip>
+                          {livePos
+                            ? <Chip color={livePos.dist<=geo.radius?C.emerald:C.rose} bg={livePos.dist<=geo.radius?C.emeraldLt:C.roseLt}>
+                                {livePos.dist<=geo.radius?'✅':'⚠️'} Você está a {Math.round(livePos.dist)}m
+                              </Chip>
+                            : <button onClick={()=>navigator.geolocation.getCurrentPosition(p=>{const d=dist(p.coords.latitude,p.coords.longitude,geo.lat,geo.lng);setLivePos({lat:p.coords.latitude,lng:p.coords.longitude,dist:d})},()=>{})}
+                                style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:20,padding:'3px 10px',cursor:'pointer',fontFamily:C.fb,fontSize:11,color:C.inkMid}}>
+                                📡 Ver minha distância
+                              </button>
+                          }
+                        </div>
+                        {livePos&&(
+                          <div style={{marginTop:8,background:C.bg,borderRadius:10,padding:'10px 14px',border:`1px solid ${C.border}`}}>
+                            <div style={{fontFamily:C.fb,fontSize:11,color:C.inkLight,marginBottom:4}}>Posição atual</div>
+                            <div style={{fontFamily:C.ff,fontSize:13,fontWeight:700,color:livePos.dist<=geo.radius?C.emerald:C.rose}}>
+                              {Math.round(livePos.dist)}m do ponto de referência
+                            </div>
+                            <div style={{marginTop:8,height:6,borderRadius:6,background:C.border,overflow:'hidden'}}>
+                              <div style={{height:'100%',borderRadius:6,width:`${Math.min(100,(livePos.dist/geo.radius)*100)}%`,background:livePos.dist<=geo.radius?C.emerald:C.rose,transition:'width .5s'}}/>
+                            </div>
+                            <div style={{display:'flex',justifyContent:'space-between',marginTop:3}}>
+                              <span style={{fontFamily:C.fb,fontSize:10,color:C.inkLight}}>0m</span>
+                              <span style={{fontFamily:C.fb,fontSize:10,color:C.inkLight}}>limite: {geo.radius}m</span>
+                            </div>
+                            <button onClick={()=>navigator.geolocation.getCurrentPosition(p=>{const d=dist(p.coords.latitude,p.coords.longitude,geo.lat,geo.lng);setLivePos({lat:p.coords.latitude,lng:p.coords.longitude,dist:d})},()=>{})}
+                              style={{marginTop:8,background:C.brandLt,border:`1px solid ${C.brand}20`,borderRadius:8,padding:'5px 12px',cursor:'pointer',fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.brand}}>
+                              🔄 Atualizar posição
+                            </button>
+                          </div>
+                        )}
                       </div>
                     ):(
                       <div style={{fontFamily:C.fb,fontSize:13,color:C.inkMid,marginTop:8}}>Ponto permitido de qualquer local.</div>
                     )}
                   </div>
-                  {geo&&<Btn sm variant="danger" onClick={async()=>{await deleteDoc(cfg('geofence'));setGeoF({address:'',radius:'100'})}}>Remover</Btn>}
+                  {geo&&<Btn sm variant="danger" onClick={async()=>{await deleteDoc(cfg('geofence'));setGeoF({address:'',radius:'100'});setLivePos(null)}}>Remover</Btn>}
                 </div>
               </Card>
 
