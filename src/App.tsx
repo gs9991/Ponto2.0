@@ -82,7 +82,19 @@ interface Company    { name:string;cnpj:string;address:string;phone:string;email
 interface CompanyMeta{ slug:string;name:string;adminUsername:string;adminPassword:string;createdAt:string }
 interface Employee   { id:number;name:string;role:string;username:string;password:string;avatar:string;payType:'day'|'hour';payValue:number;hoursPerDay:number;overtimeRate:50|70|100;discounts:Discount[];gratifications:Discount[];cpf?:string;admission?:string;fgts?:boolean;companySlug:string }
 interface LogEntry   { type:string;time:Date }
-interface EmpState   { status:string;log:LogEntry[];workStart:Date|null;breakStart:Date|null;totalWork:number;totalBreak:number;days:string[];dailyWork:Record<string,number>;dailyOff:Record<string,'paid'|'unpaid'>;dailyNight:Record<string,number>;dailyOvertimeRate:Record<string,number> }
+type AbsenceType = 'paid'|'unpaid'|'medical'|'justified'|'holiday'|'compensatory'|'bank_in'
+interface EmpState   { status:string;log:LogEntry[];workStart:Date|null;breakStart:Date|null;totalWork:number;totalBreak:number;days:string[];dailyWork:Record<string,number>;dailyOff:Record<string,AbsenceType>;dailyNight:Record<string,number>;dailyOvertimeRate:Record<string,number>;bankBalance:number }
+
+// Configuração de cada tipo de ausência
+const ABSENCE_CONFIG: Record<AbsenceType,{label:string;emoji:string;color:string;colorLt:string;paga:boolean;contaDSR:boolean;descontaDia:boolean;descricao:string}> = {
+  paid:        {label:'Folga Paga',      emoji:'✅',color:'#059669',colorLt:'#D1FAE5',paga:true, contaDSR:false,descontaDia:false,descricao:'Dia de folga remunerado pela empresa'},
+  unpaid:      {label:'Falta Injustif.', emoji:'❌',color:'#E11D48',colorLt:'#FFE4E6',paga:false,contaDSR:true, descontaDia:true, descricao:'Falta sem justificativa — desconta dia + DSR'},
+  medical:     {label:'Atestado Médico', emoji:'🏥',color:'#0369A1',colorLt:'#E0F2FE',paga:true, contaDSR:false,descontaDia:false,descricao:'Afastamento médico — protegido por lei (CLT 473)'},
+  justified:   {label:'Falta Justif.',  emoji:'📋',color:'#D97706',colorLt:'#FEF3C7',paga:false,contaDSR:false,descontaDia:true, descricao:'Falta justificada — desconta o dia, mas não o DSR'},
+  holiday:     {label:'Feriado',         emoji:'🎉',color:'#7C3AED',colorLt:'#EDE9FE',paga:true, contaDSR:false,descontaDia:false,descricao:'Feriado nacional ou estadual — remunerado por lei'},
+  compensatory:{label:'Folga Compens.', emoji:'🔄',color:'#0891B2',colorLt:'#CFFAFE',paga:true, contaDSR:false,descontaDia:false,descricao:'Compensação por trabalho em feriado ou hora extra'},
+  bank_in:     {label:'Banco de Horas',  emoji:'🏦',color:'#6366F1',colorLt:'#EEF2FF',paga:false,contaDSR:false,descontaDia:false,descricao:'Horas extras creditadas no banco de horas'},
+}
 interface User       { id:number;name:string;username:string;avatar:string;role:string;payType:'day'|'hour';payValue:number;hoursPerDay:number;discounts:Discount[];companySlug?:string }
 
 function calcNightMs(s:number,e:number){ let n=0; for(let t=s;t<e;t+=60000){ const h=new Date(t).getHours(); if(h>=22||h<5)n+=60000 }; return n }
@@ -448,11 +460,11 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
   useEffect(()=>{const t=setInterval(()=>setNow(new Date()),1000);return()=>clearInterval(t)},[])
   useEffect(()=>{const u=onSnapshot(doc(db,'companies',slug),s=>{if(s.exists())setMeta(s.data() as CompanyMeta)});return()=>u()},[slug])
   useEffect(()=>{const u=onSnapshot(collection(db,ec),s=>{setEmployees(s.docs.map(d=>({...(d.data() as Employee)})));setLoading(false)});return()=>u()},[slug])
-  useEffect(()=>{const u=onSnapshot(collection(db,rc),s=>{const r:Record<number,EmpState>={};s.docs.forEach(d=>{const dt=d.data();r[Number(d.id)]={...dt,log:(dt.log||[]).map((e:{type:string;time:string})=>({type:e.type,time:new Date(e.time)})),workStart:dt.workStart?new Date(dt.workStart):null,breakStart:dt.breakStart?new Date(dt.breakStart):null,dailyWork:dt.dailyWork||{},dailyOff:dt.dailyOff||{},dailyNight:dt.dailyNight||{},dailyOvertimeRate:dt.dailyOvertimeRate||{}} as EmpState});setRecords(r)});return()=>u()},[slug])
+  useEffect(()=>{const u=onSnapshot(collection(db,rc),s=>{const r:Record<number,EmpState>={};s.docs.forEach(d=>{const dt=d.data();r[Number(d.id)]={...dt,log:(dt.log||[]).map((e:{type:string;time:string})=>({type:e.type,time:new Date(e.time)})),workStart:dt.workStart?new Date(dt.workStart):null,breakStart:dt.breakStart?new Date(dt.breakStart):null,dailyWork:dt.dailyWork||{},dailyOff:dt.dailyOff||{},dailyNight:dt.dailyNight||{},dailyOvertimeRate:dt.dailyOvertimeRate||{},bankBalance:dt.bankBalance||0} as EmpState});setRecords(r)});return()=>u()},[slug])
   useEffect(()=>{const u=onSnapshot(doc(db,`companies/${slug}/config`,'geofence'),s=>{if(s.exists())setGeo(s.data() as any);else setGeo(null)});return()=>u()},[slug])
   useEffect(()=>{const u=onSnapshot(doc(db,`companies/${slug}/config`,'company'),s=>{if(s.exists()){const d=s.data() as Company;setCo(d);setCoForm({name:d.name||'',cnpj:d.cnpj||'',address:d.address||'',phone:d.phone||'',email:d.email||'',logo:d.logo||''})}});return()=>u()},[slug])
 
-  const gs=(id:number):EmpState=>records[id]||{status:STATUS.OUT,log:[],workStart:null,breakStart:null,totalWork:0,totalBreak:0,days:[],dailyWork:{},dailyOff:{},dailyNight:{},dailyOvertimeRate:{}}
+  const gs=(id:number):EmpState=>records[id]||{status:STATUS.OUT,log:[],workStart:null,breakStart:null,totalWork:0,totalBreak:0,days:[],dailyWork:{},dailyOff:{},dailyNight:{},dailyOvertimeRate:{},bankBalance:0}
   const geocode=async(a:string)=>{try{const r=await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(a)}&limit=1`);const d=await r.json();if(!d.length)return null;return{lat:parseFloat(d[0].lat),lng:parseFloat(d[0].lon)}}catch{return null}}
   const dist=(a:number,b:number,c:number,d:number)=>{const R=6371000,dLat=(c-a)*Math.PI/180,dLng=(d-b)*Math.PI/180,x=Math.sin(dLat/2)**2+Math.cos(a*Math.PI/180)*Math.cos(c*Math.PI/180)*Math.sin(dLng/2)**2;return R*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x))}
 
@@ -487,24 +499,94 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
   }
 
   const calcPay=(emp:Employee,st:EmpState,lw:number,mf?:string)=>{
-    const hv=emp.payType==='hour'?emp.payValue:emp.payValue/emp.hoursPerDay, jMs=emp.hoursPerDay*3600000
-    const allD={...(st.dailyWork||{})};if(!mf&&st.status!==STATUS.OUT){const t=TODAY();allD[t]=(allD[t]||0)+(st.workStart?now.getTime()-st.workStart.getTime():0)}
+    const hv=emp.payType==='hour'?emp.payValue:emp.payValue/emp.hoursPerDay
+    const jMs=emp.hoursPerDay*3600000
+
+    // Horas trabalhadas por dia
+    const allD={...(st.dailyWork||{})}
+    if(!mf&&st.status!==STATUS.OUT){const t=TODAY();allD[t]=(allD[t]||0)+(st.workStart?now.getTime()-st.workStart.getTime():0)}
     const fd=mf?Object.fromEntries(Object.entries(allD).filter(([d])=>d.startsWith(mf))):allD
     const fo=mf?Object.fromEntries(Object.entries(st.dailyOff||{}).filter(([d])=>d.startsWith(mf))):(st.dailyOff||{})
     const fn=mf?Object.fromEntries(Object.entries(st.dailyNight||{}).filter(([d])=>d.startsWith(mf))):(st.dailyNight||{})
-    let regMs=0,otR:Record<number,number>={}
-    Object.entries(fd).forEach(([date,ms])=>{const reg=Math.min(ms as number,jMs),ot=Math.max(0,(ms as number)-jMs);regMs+=reg;if(ot>0){const r=(st.dailyOvertimeRate||{})[date]??(emp.overtimeRate||50);otR[r]=(otR[r]||0)+ot}})
+
+    // Horas normais, extras e banco de horas
+    let regMs=0,otR:Record<number,number>={},bankCreditMs=0
+    Object.entries(fd).forEach(([date,ms])=>{
+      const absType=fo[date]
+      if(absType==='bank_in'){
+        // Hora extra vai pro banco, não paga em dinheiro
+        const ot=Math.max(0,(ms as number)-jMs)
+        bankCreditMs+=ot
+        regMs+=Math.min(ms as number,jMs)
+      } else {
+        const reg=Math.min(ms as number,jMs),ot=Math.max(0,(ms as number)-jMs)
+        regMs+=reg
+        if(ot>0){const r=(st.dailyOvertimeRate||{})[date]??(emp.overtimeRate||50);otR[r]=(otR[r]||0)+ot}
+      }
+    })
+
+    // Dias efetivamente trabalhados
+    const workedDays=Object.keys(fd).filter(d=>(fd[d]||0)>0)
+    const dw=workedDays.length+(!mf&&st.status!==STATUS.OUT?1:0)
+
+    // Dias pagos por ausência (folga paga, atestado, feriado, compensatória)
+    const paidAbsenceDays=Object.entries(fo).filter(([,v])=>ABSENCE_CONFIG[v]?.paga&&(fd[Object.keys(fo).find(k=>fo[k]===v)||'']||0)===0).length
+    // Mais simples: contar dias sem trabalho mas com ausência paga
+    const paidAbsDays=Object.entries(fo).filter(([date,absType])=>ABSENCE_CONFIG[absType]?.paga&&!(fd[date]&&(fd[date] as number)>0)).length
+
+    // ── DSR (Descanso Semanal Remunerado) ──
+    // Faltas injustificadas na semana cortam o DSR do domingo daquela semana
+    // DSR = salário_diário. Para cada semana com falta injustificada, -1 DSR
+    let dsrDeduction=0
+    if(emp.payType==='day'){
+      // Agrupar faltas injustificadas por semana
+      const injustWeeks=new Set<string>()
+      Object.entries(fo).forEach(([date,absType])=>{
+        if(ABSENCE_CONFIG[absType]?.contaDSR){
+          const d=new Date(date+'T12:00:00')
+          const weekStart=new Date(d);weekStart.setDate(d.getDate()-d.getDay())
+          injustWeeks.add(weekStart.toISOString().split('T')[0])
+        }
+      })
+      dsrDeduction=injustWeeks.size*emp.payValue
+    }
+
+    // ── Desconto de dias (faltas que descontam) ──
+    const deductedDays=Object.values(fo).filter(v=>ABSENCE_CONFIG[v]?.descontaDia).length
+    const absDeduction=emp.payType==='day'?deductedDays*emp.payValue:(deductedDays*emp.hoursPerDay*hv)
+
     const totalMs=mf?Object.values(fd).reduce((a,b)=>a+(b as number),0):lw
     const brkMs=mf?0:(st.totalBreak||0)+(st.breakStart?now.getTime()-st.breakStart.getTime():0)
-    const dw=Object.keys(fd).filter(d=>(fd[d]||0)>0).length+(!mf&&st.status!==STATUS.OUT?1:0)
-    const po=Object.values(fo).filter(v=>v==='paid').length
     const otMs=Object.values(otR).reduce((a,b)=>a+b,0)
+
+    // Valor base
     let rv=0,ov=0
-    if(emp.payType==='hour')rv=(regMs/3600000)*hv;else rv=(dw+po)*emp.payValue
+    if(emp.payType==='hour') rv=(regMs/3600000)*hv
+    else rv=(dw+paidAbsDays)*emp.payValue
+
+    // Hora extra em dinheiro
     Object.entries(otR).forEach(([r,ms])=>{ov+=(ms as number)/3600000*hv*(1+Number(r)/100)})
+
+    // Adicional noturno
     const nMs=Object.values(fn).reduce((a:number,b)=>a+(b as number),0),nb=(nMs/3600000)*hv*0.20
-    const gross=rv+ov+nb,disc=(emp.discounts||[]).reduce((s,d)=>s+d.value,0),grat=(emp.gratifications||[]).reduce((s,g)=>s+g.value,0)
-    return{totalMs,daysWorked:dw,grossValue:gross,autoDeductions:0,manualDiscountTotal:disc,totalDeductions:disc,net:Math.max(0,gross-disc)+grat,breakMs:brkMs,overtimeMs:otMs,overtimeByRate:otR,nightMs:nMs,nightBonus:nb,gratificationsTotal:grat,regularValue:rv,overtimeValue:ov}
+
+    const gross=rv+ov+nb
+    const disc=(emp.discounts||[]).reduce((s,d)=>s+d.value,0)
+    const grat=(emp.gratifications||[]).reduce((s,g)=>s+g.value,0)
+    const autoDeduct=dsrDeduction+absDeduction
+    const totalDeductions=disc+autoDeduct
+
+    return{
+      totalMs,daysWorked:dw,grossValue:gross,
+      autoDeductions:autoDeduct,dsrDeduction,absDeduction,deductedDays,
+      manualDiscountTotal:disc,totalDeductions,
+      net:Math.max(0,gross-totalDeductions)+grat,
+      breakMs:brkMs,overtimeMs:otMs,overtimeByRate:otR,
+      nightMs:nMs,nightBonus:nb,gratificationsTotal:grat,
+      regularValue:rv,overtimeValue:ov,
+      bankCreditMs,bankBalance:st.bankBalance||0,
+      paidAbsDays,
+    }
   }
 
   const valForm=()=>{const e:Record<string,string>={};if(!form.name.trim())e.name='Obrigatório';if(!form.role.trim())e.role='Obrigatório';if(!form.username.trim())e.username='Obrigatório';else if(employees.find(e=>e.username===form.username&&e.id!==editEmp?.id))e.username='Usuário já existe';if(!editEmp&&!form.password.trim())e.password='Obrigatório';if(!form.payValue||isNaN(Number(form.payValue))||Number(form.payValue)<=0)e.payValue='Valor inválido';return e}
@@ -526,7 +608,23 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
   const addGrat=async(eid:number)=>{setGerr('');if(!gform.value||isNaN(Number(gform.value))||Number(gform.value)<=0){setGerr('Valor inválido');return}if(!gform.reason.trim()){setGerr('Informe o motivo');return};const emp=employees.find(e=>e.id===eid);if(!emp)return;const g:Discount={id:Date.now(),value:Number(gform.value),reason:gform.reason.trim(),date:fmtDs(new Date())};await setDoc(doc(db,ec,String(eid)),{...emp,gratifications:[...(emp.gratifications||[]),g]});setGform({value:'',reason:''});setGtgt(null);setAddG(false)}
   const remGrat=async(eid:number,gid:number)=>{const emp=employees.find(e=>e.id===eid);if(!emp)return;await setDoc(doc(db,ec,String(eid)),{...emp,gratifications:(emp.gratifications||[]).filter(g=>g.id!==gid)})}
 
-  const markOff=async(eid:number,date:string,type:'paid'|'unpaid'|null)=>{const st=gs(eid);const off={...(st.dailyOff||{})};if(type===null)delete off[date];else off[date]=type;await setDoc(doc(db,rc,String(eid)),{...st,dailyOff:off,log:st.log.map(e=>({type:e.type,time:e.time.toISOString()})),workStart:st.workStart?st.workStart.toISOString():null,breakStart:st.breakStart?st.breakStart.toISOString():null})}
+  const markOff=async(eid:number,date:string,type:AbsenceType|null)=>{
+    const st=gs(eid);const off={...(st.dailyOff||{})}
+    if(type===null)delete off[date];else off[date]=type
+    await setDoc(doc(db,rc,String(eid)),{...st,dailyOff:off,log:st.log.map(e=>({type:e.type,time:e.time.toISOString()})),workStart:st.workStart?st.workStart.toISOString():null,breakStart:st.breakStart?st.breakStart.toISOString():null})
+  }
+
+  const useBankHours=async(eid:number,hoursMs:number)=>{
+    const st=gs(eid)
+    const newBalance=Math.max(0,(st.bankBalance||0)-hoursMs)
+    await setDoc(doc(db,rc,String(eid)),{...st,bankBalance:newBalance,log:st.log.map(e=>({type:e.type,time:e.time.toISOString()})),workStart:st.workStart?st.workStart.toISOString():null,breakStart:st.breakStart?st.breakStart.toISOString():null})
+  }
+
+  const creditBankHours=async(eid:number,hoursMs:number)=>{
+    const st=gs(eid)
+    const newBalance=(st.bankBalance||0)+hoursMs
+    await setDoc(doc(db,rc,String(eid)),{...st,bankBalance:newBalance,log:st.log.map(e=>({type:e.type,time:e.time.toISOString()})),workStart:st.workStart?st.workStart.toISOString():null,breakStart:st.breakStart?st.breakStart.toISOString():null})
+  }
 
   const saveHours=async(eid:number,date:string,h:number,m:number,otRate?:number)=>{const ms=(h*60+m)*60000,st=gs(eid),old=(st.dailyWork||{})[date]||0,diff=ms-old;const nDW={...(st.dailyWork||{}),[date]:ms},nTW=Math.max(0,(st.totalWork||0)+diff);let nd=[...(st.days||[])];if(ms>0&&!nd.includes(date))nd=[...nd,date];if(ms===0)nd=nd.filter(d=>d!==date);const nOT={...(st.dailyOvertimeRate||{})};if(otRate!==undefined)nOT[date]=otRate;await setDoc(doc(db,rc,String(eid)),{...st,dailyWork:nDW,totalWork:nTW,days:nd,dailyOvertimeRate:nOT,log:st.log.map(e=>({type:e.type,time:e.time.toISOString()})),workStart:st.workStart?st.workStart.toISOString():null,breakStart:st.breakStart?st.breakStart.toISOString():null});setEditDay(null);setEditH('');setEditMin('')}
 
@@ -708,6 +806,14 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
     const ded:[string,string,string][]=[...( emp.discounts||[]).map(d=>[d.reason,d.date,fmt(d.value)] as [string,string,string])]
     if(emp.fgts) ded.push(['FGTS (8% sobre bruto)', '—', fmt(fgtsV)])
 
+    // Descontos automáticos (DSR e faltas)
+    if(pay.dsrDeduction>0){
+      ded.unshift(['DSR — Descanso Semanal (faltas injustif.)',`${pay.deductedDays||0} sem.`,fmt(pay.dsrDeduction)])
+    }
+    if(pay.absDeduction>0){
+      ded.unshift(['Desconto de dias não trabalhados',`${pay.deductedDays} dia(s)`,fmt(pay.absDeduction)])
+    }
+
     if(ded.length===0){
       box(mg, y, cW, 9, '#FFF8F8', undefined, 0)
       txt('Nenhum desconto nesta competência.', mg+cW/2, y+6, {size:8,color:'#94A3B8',italic:true,align:'center'})
@@ -722,6 +828,16 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
         y+=7.5
       })
       line(mg, y, mg+cW, '#FECDD3')
+    }
+
+    // Banco de horas
+    if(pay.bankBalance>0){
+      y+=2
+      box(mg, y, cW, 9, '#EEF2FF', '#C7D2FE', 1)
+      txt('🏦  BANCO DE HORAS ACUMULADO', mg+5, y+6, {size:8,bold:true,color:'#4338CA'})
+      const bH=Math.floor(pay.bankBalance/3600000),bM=Math.floor((pay.bankBalance%3600000)/60000)
+      txt(`${bH}h${String(bM).padStart(2,'0')} disponíveis`, mg+cW-3, y+6, {size:8,bold:true,color:'#4338CA',align:'right'})
+      y+=12
     }
 
     // Total descontos
@@ -940,6 +1056,9 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
                   {label:'📅 Dias trabalhados',val:myPay.daysWorked+' dia(s)',sub:'',c:C.sky},
                   {label:'💵 Bruto',val:fmt(myPay.grossValue),sub:'',c:C.brand},
                   ...(myPay.nightMs>0?[{label:'🌙 Noturno',val:fmt(myPay.nightBonus),sub:'+20%',c:'#7C3AED'}]:[]),
+                  ...(myPay.dsrDeduction>0?[{label:'📉 Desconto DSR',val:'- '+fmt(myPay.dsrDeduction),sub:'faltas injustif.',c:C.rose}]:[]),
+                  ...(myPay.absDeduction>0?[{label:'📉 Faltas desc.',val:'- '+fmt(myPay.absDeduction),sub:myPay.deductedDays+' dia(s)',c:C.rose}]:[]),
+                  ...(myPay.bankBalance>0?[{label:'🏦 Banco de horas',val:fmtHM(myPay.bankBalance),sub:'disponível',c:'#6366F1'}]:[]),
                 ].map(({label,val,sub,c})=>(
                   <Card key={label} style={{padding:'14px 18px',marginBottom:8,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
                     <div>
@@ -1165,11 +1284,14 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
                           {/* Key stats */}
                           <div style={{display:'flex',flexDirection:'column',gap:6,marginBottom:16}}>
                             {[
-                              {label:'⏱ Horas',val:fmtH(pay.totalMs)+' ('+fmtDur(pay.totalMs)+')',c:C.emerald},
-                              {label:'📅 Dias',val:pay.daysWorked+' dia(s)',c:C.sky},
-                              {label:'💵 Bruto',val:fmt(pay.grossValue),c:C.brand},
+                              {label:'⏱ Horas trabalhadas',val:fmtH(pay.totalMs)+' ('+fmtDur(pay.totalMs)+')',c:C.emerald},
+                              {label:'📅 Dias trabalhados',val:pay.daysWorked+' dia(s)',c:C.sky},
+                              {label:'💵 Salário bruto',val:fmt(pay.grossValue),c:C.brand},
                               ...(pay.overtimeMs>0?[{label:'⚡ Hora extra',val:fmtH(pay.overtimeMs),c:C.amber}]:[]),
-                              ...(pay.nightMs>0?[{label:'🌙 Noturno',val:fmt(pay.nightBonus),c:'#7C3AED'}]:[]),
+                              ...(pay.nightMs>0?[{label:'🌙 Adic. noturno',val:fmt(pay.nightBonus),c:'#7C3AED'}]:[]),
+                              ...(pay.dsrDeduction>0?[{label:'📉 DSR (faltas injust.)',val:'- '+fmt(pay.dsrDeduction),c:C.rose}]:[]),
+                              ...(pay.absDeduction>0?[{label:'📉 Desc. faltas ('+pay.deductedDays+' dia(s))',val:'- '+fmt(pay.absDeduction),c:C.rose}]:[]),
+                              ...(pay.bankBalance>0?[{label:'🏦 Banco de horas',val:fmtHM(pay.bankBalance),c:'#6366F1'}]:[]),
                             ].map(({label,val,c})=>(
                               <div key={label} style={{display:'flex',justifyContent:'space-between',padding:'9px 12px',background:C.bg,borderRadius:9}}>
                                 <span style={{fontFamily:C.fb,fontSize:12,color:C.inkMid}}>{label}</span>
@@ -1273,39 +1395,64 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
                 </select>
               </div>
 
+              {/* Legenda de ausências */}
+              <Card style={{marginBottom:12,padding:'10px 14px'}}>
+                <div style={{fontFamily:C.fb,fontSize:10,fontWeight:700,color:C.inkLight,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:8}}>Legenda de ocorrências</div>
+                <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+                  {(Object.entries(ABSENCE_CONFIG) as [AbsenceType,typeof ABSENCE_CONFIG[AbsenceType]][]).map(([k,v])=>(
+                    <span key={k} style={{display:'inline-flex',alignItems:'center',gap:3,padding:'3px 8px',borderRadius:20,background:v.colorLt,color:v.color,fontSize:10,fontWeight:600,fontFamily:C.fb}} title={v.descricao}>
+                      {v.emoji} {v.label} {v.paga?'✓':'✗'}
+                    </span>
+                  ))}
+                </div>
+                <div style={{fontFamily:C.fb,fontSize:10,color:C.inkLight,marginTop:6}}>✓ = remunerado · ✗ = não remunerado</div>
+              </Card>
+
               {(mapTgt?employees.filter(e=>e.id===mapTgt):employees).map(emp=>{
                 const st=gs(emp.id),[year,month]=mapM.split('-').map(Number),days=getDaysInMonth(year,month-1)
                 const mTotal=days.reduce((s,d)=>s+(st.dailyWork[d]||0),0)
+                const bankBal=st.bankBalance||0
                 return (
                   <Card key={emp.id} style={{marginBottom:14,padding:0,overflow:'hidden'}}>
-                    <div style={{padding:'14px 16px 12px',borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-                      <div style={{fontFamily:C.ff,fontSize:15,fontWeight:700,color:C.ink}}>{emp.name}</div>
-                      <div style={{fontFamily:C.ff,fontSize:15,fontWeight:700,color:C.emerald}}>{fmtHM(mTotal)}</div>
+                    <div style={{padding:'12px 16px 10px',borderBottom:`1px solid ${C.border}`}}>
+                      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:bankBal>0?8:0}}>
+                        <div style={{fontFamily:C.ff,fontSize:15,fontWeight:700,color:C.ink}}>{emp.name}</div>
+                        <div style={{fontFamily:C.ff,fontSize:15,fontWeight:700,color:C.emerald}}>{fmtHM(mTotal)}</div>
+                      </div>
+                      {bankBal>0&&(
+                        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',background:'#EEF2FF',borderRadius:8,padding:'6px 10px',border:'1px solid #6366F130'}}>
+                          <span style={{fontFamily:C.fb,fontSize:11,fontWeight:700,color:'#6366F1'}}>🏦 Banco de Horas: {fmtHM(bankBal)}</span>
+                          <button onClick={()=>useBankHours(emp.id,bankBal)} style={{background:'#6366F1',border:'none',borderRadius:6,padding:'3px 8px',cursor:'pointer',fontFamily:C.fb,fontSize:10,fontWeight:700,color:'#fff'}}>Zerar</button>
+                        </div>
+                      )}
                     </div>
                     <div style={{padding:'8px 12px 12px'}}>
                       {days.map(date=>{
                         const ms=st.dailyWork[date]||0,off=st.dailyOff?.[date],isToday=date===TODAY(),[,mo,d]=date.split('-')
                         const dow=new Date(date+'T12:00:00').toLocaleDateString('pt-BR',{weekday:'short'})
                         const isEd=editDay?.empId===emp.id&&editDay?.date===date
+                        const absConf=off?ABSENCE_CONFIG[off]:null
+                        const isWeekend=new Date(date+'T12:00:00').getDay()===0||new Date(date+'T12:00:00').getDay()===6
                         return (
                           <div key={date}>
-                            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 10px',background:isToday?C.brandLt:'transparent',borderRadius:9,marginBottom:2,border:isToday?`1px solid ${C.brand}20`:'1px solid transparent'}}>
-                              <div style={{display:'flex',alignItems:'center',gap:8}}>
-                                <span style={{fontFamily:C.fb,fontSize:10,color:C.inkLight,width:26,textTransform:'capitalize'}}>{dow}</span>
+                            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 10px',background:isToday?C.brandLt:isWeekend?C.bg:'transparent',borderRadius:9,marginBottom:2,border:isToday?`1px solid ${C.brand}20`:isWeekend?`1px solid ${C.border}`:'1px solid transparent',opacity:isWeekend&&!ms&&!off?0.5:1}}>
+                              <div style={{display:'flex',alignItems:'center',gap:8,flex:1}}>
+                                <span style={{fontFamily:C.fb,fontSize:10,color:isWeekend?C.brand:C.inkLight,width:26,textTransform:'capitalize',fontWeight:isWeekend?700:400}}>{dow}</span>
                                 <span style={{fontFamily:C.fb,fontSize:13,color:C.inkMid,fontWeight:isToday?600:400}}>{d}/{mo}</span>
-                                {off&&<Chip color={off==='paid'?C.emerald:C.amber} bg={off==='paid'?C.emeraldLt:C.amberLt}>{off==='paid'?'Paga':'Folga'}</Chip>}
+                                {absConf&&<span style={{display:'inline-flex',alignItems:'center',gap:3,padding:'2px 7px',borderRadius:20,background:absConf.colorLt,color:absConf.color,fontSize:10,fontWeight:600,fontFamily:C.fb}}>{absConf.emoji} {absConf.label}</span>}
                               </div>
-                              <div style={{display:'flex',alignItems:'center',gap:8}}>
+                              <div style={{display:'flex',alignItems:'center',gap:6}}>
                                 <span style={{fontFamily:C.ff,fontSize:13,fontWeight:700,color:ms>0?C.emerald:C.inkXLight}}>{ms>0?fmtHM(ms):off?'—':'0h00'}</span>
                                 <button onClick={()=>{setEditDay(isEd?null:{empId:emp.id,date});if(!isEd){const h=Math.floor(ms/3600000),m=Math.floor((ms%3600000)/60000);setEditH(String(h));setEditMin(String(m))}}}
                                   style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:6,padding:'3px 8px',cursor:'pointer',fontSize:11,color:C.inkMid}}>
                                   {isEd?'✕':'✏️'}
                                 </button>
-                                <select value={off||''} onChange={e=>markOff(emp.id,date,(e.target.value as 'paid'|'unpaid'|null)||null)}
-                                  style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:6,padding:'4px 6px',color:C.inkMid,fontSize:11,fontFamily:C.fb,cursor:'pointer'}}>
-                                  <option value="">—</option>
-                                  <option value="paid">Folga Paga</option>
-                                  <option value="unpaid">Folga</option>
+                                <select value={off||''} onChange={e=>markOff(emp.id,date,(e.target.value as AbsenceType|null)||null)}
+                                  style={{background:absConf?absConf.colorLt:C.bg,border:`1px solid ${absConf?absConf.color+'50':C.border}`,borderRadius:6,padding:'4px 6px',color:absConf?absConf.color:C.inkMid,fontSize:10,fontFamily:C.fb,cursor:'pointer',fontWeight:absConf?700:400,maxWidth:110}}>
+                                  <option value="">— Ocorrência</option>
+                                  {(Object.entries(ABSENCE_CONFIG) as [AbsenceType,typeof ABSENCE_CONFIG[AbsenceType]][]).map(([k,v])=>(
+                                    <option key={k} value={k}>{v.emoji} {v.label}</option>
+                                  ))}
                                 </select>
                               </div>
                             </div>
