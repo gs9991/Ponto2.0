@@ -423,6 +423,7 @@ function CompanyApp({ slug, onLogout }: { slug: string; onLogout: ()=>void }) {
   const [discountForm, setDiscountForm] = useState({ value:'', reason:'' })
   const [discountError, setDiscountError] = useState('')
   const [expandedReport, setExpandedReport] = useState<number|null>(null)
+  const [reportMonth, setReportMonth] = useState(() => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}` })
   const [isAddingGratif, setIsAddingGratif] = useState(false)
   const [gratifTarget, setGratifTarget] = useState<number|null>(null)
   const [gratifForm, setGratifForm] = useState({ value:'', reason:'' })
@@ -579,21 +580,28 @@ function CompanyApp({ slug, onLogout }: { slug: string; onLogout: ()=>void }) {
     )
   }
 
-  const calcPayment = (emp:Employee, state:EmpState, liveWork:number) => {
-    const totalMs = liveWork
-    const totalBreakMs = (state.totalBreak||0)+(state.breakStart?now.getTime()-state.breakStart.getTime():0)
-    const daysWorked = Object.keys(state.dailyWork||{}).filter(d=>(state.dailyWork[d]||0)>0).length + (state.status!==STATUS.OUT?1:0)
-    const paidOffDays = Object.values(state.dailyOff||{}).filter(v=>v==='paid').length
-    const totalPaidDays = daysWorked + paidOffDays
+  // monthFilter: 'YYYY-MM' para filtrar por mês específico, ou undefined para mês atual ao vivo
+  const calcPayment = (emp:Employee, state:EmpState, liveWork:number, monthFilter?: string) => {
     const hourValue = emp.payType==='hour' ? emp.payValue : emp.payValue/emp.hoursPerDay
     const journeyMs = emp.hoursPerDay * 3600000
-    let regularMs = 0, overtimeByRate: Record<number,number> = {}
+
     const allDays = { ...(state.dailyWork||{}) }
-    if (state.status!==STATUS.OUT) {
+    if (!monthFilter && state.status!==STATUS.OUT) {
       const todayStr = TODAY()
       allDays[todayStr] = (allDays[todayStr]||0) + (state.workStart ? now.getTime()-state.workStart.getTime() : 0)
     }
-    Object.entries(allDays).forEach(([date, ms]) => {
+    const filteredDays = monthFilter
+      ? Object.fromEntries(Object.entries(allDays).filter(([d]) => d.startsWith(monthFilter)))
+      : allDays
+    const filteredOff = monthFilter
+      ? Object.fromEntries(Object.entries(state.dailyOff||{}).filter(([d]) => d.startsWith(monthFilter)))
+      : (state.dailyOff||{})
+    const filteredNight = monthFilter
+      ? Object.fromEntries(Object.entries(state.dailyNight||{}).filter(([d]) => d.startsWith(monthFilter)))
+      : (state.dailyNight||{})
+
+    let regularMs = 0, overtimeByRate: Record<number,number> = {}
+    Object.entries(filteredDays).forEach(([date, ms]) => {
       const reg = Math.min(ms as number, journeyMs)
       const ot = Math.max(0, (ms as number)-journeyMs)
       regularMs += reg
@@ -602,7 +610,15 @@ function CompanyApp({ slug, onLogout }: { slug: string; onLogout: ()=>void }) {
         overtimeByRate[rate] = (overtimeByRate[rate]||0) + ot
       }
     })
+    const totalMs = monthFilter
+      ? Object.values(filteredDays).reduce((a,b) => a+(b as number), 0)
+      : liveWork
+    const totalBreakMs = monthFilter ? 0 : (state.totalBreak||0)+(state.breakStart?now.getTime()-state.breakStart.getTime():0)
+    const daysWorked = Object.keys(filteredDays).filter(d=>(filteredDays[d]||0)>0).length + (!monthFilter && state.status!==STATUS.OUT ? 1 : 0)
+    const paidOffDays = Object.values(filteredOff).filter(v=>v==='paid').length
+    const totalPaidDays = daysWorked + paidOffDays
     const overtimeMs = Object.values(overtimeByRate).reduce((a,b)=>a+b,0)
+
     let regularValue = 0, overtimeValue = 0
     if (emp.payType==='hour') {
       regularValue = (regularMs/3600000)*hourValue
@@ -612,15 +628,14 @@ function CompanyApp({ slug, onLogout }: { slug: string; onLogout: ()=>void }) {
     Object.entries(overtimeByRate).forEach(([rate, ms]) => {
       overtimeValue += (ms as number)/3600000 * hourValue * (1+Number(rate)/100)
     })
-    const nightMs = Object.values(state.dailyNight||{}).reduce((a:number,b)=>a+(b as number),0)
+    const nightMs = Object.values(filteredNight).reduce((a:number,b)=>a+(b as number),0)
     const nightBonus = (nightMs/3600000)*hourValue*0.20
     const grossValue = regularValue + overtimeValue + nightBonus
-    const autoDeductions = 0
     const manualDiscountTotal = (emp.discounts||[]).reduce((s,d)=>s+d.value,0)
-    const totalDeductions = autoDeductions + manualDiscountTotal
+    const totalDeductions = manualDiscountTotal
     const gratificationsTotal = (emp.gratifications||[]).reduce((s,g)=>s+g.value,0)
     const net = Math.max(0, grossValue-totalDeductions) + gratificationsTotal
-    return { totalMs, daysWorked, grossValue, autoDeductions, manualDiscountTotal, totalDeductions, net, breakMs:totalBreakMs, overtimeMs, overtimeByRate, nightMs, nightBonus, gratificationsTotal, regularValue, overtimeValue }
+    return { totalMs, daysWorked, grossValue, autoDeductions:0, manualDiscountTotal, totalDeductions, net, breakMs:totalBreakMs, overtimeMs, overtimeByRate, nightMs, nightBonus, gratificationsTotal, regularValue, overtimeValue }
   }
 
   const validateForm = () => {
@@ -732,7 +747,7 @@ function CompanyApp({ slug, onLogout }: { slug: string; onLogout: ()=>void }) {
     setEditingDay(null); setEditHours(''); setEditMinutes('')
   }
 
-  const generateHolerite = async (emp:Employee, _state:EmpState, payment:ReturnType<typeof calcPayment>) => {
+  const generateHolerite = async (emp:Employee, _state:EmpState, payment:ReturnType<typeof calcPayment>, holeriteMonth: string) => {
     if (!(window as any).jspdf) {
       await new Promise<void>((resolve,reject) => {
         const s = document.createElement('script')
@@ -773,7 +788,9 @@ function CompanyApp({ slug, onLogout }: { slug: string; onLogout: ()=>void }) {
       if (company?.address) txt(company.address,margin,y+17,{size:7,color:'#94a3b8'})
     }
     txt('HOLERITE',W-margin,y+2,{size:13,bold:true,color:'#6366f1',align:'right'})
-    txt(new Date().toLocaleDateString('pt-BR',{month:'long',year:'numeric'}),W-margin,y+9,{size:8,color:'#94a3b8',align:'right'})
+    const [hYear,hMon]=holeriteMonth.split('-').map(Number)
+    const holeriteDate = new Date(hYear,hMon-1,1).toLocaleDateString('pt-BR',{month:'long',year:'numeric'})
+    txt(holeriteDate,W-margin,y+9,{size:8,color:'#94a3b8',align:'right'})
     txt(`Gerado: ${new Date().toLocaleString('pt-BR')}`,W-margin,y+15,{size:7,color:'#64748b',align:'right'})
     y=42
     rect(margin,y,W-margin*2,6,'#f8fafc')
@@ -842,7 +859,7 @@ function CompanyApp({ slug, onLogout }: { slug: string; onLogout: ()=>void }) {
     txt('Assinatura do Funcionário',W-margin-35,y+18,{size:7,color:'#94a3b8',align:'center'})
     y+=24; ln(margin,y,W-margin)
     txt('Documento gerado automaticamente pelo PontoApp.',W/2,y+4,{size:6.5,color:'#94a3b8',align:'center'})
-    jdoc.save(`Holerite_${emp.name.replace(/\s+/g,'_')}_${new Date().toLocaleDateString('pt-BR').replace(/\//g,'-')}.pdf`)
+    jdoc.save(`Holerite_${emp.name.replace(/\s+/g,'_')}_${holeriteMonth}.pdf`)
   }
 
   // Live values
@@ -1183,12 +1200,27 @@ function CompanyApp({ slug, onLogout }: { slug: string; onLogout: ()=>void }) {
               {view==='reports' && (
                 <div>
                   <div style={{ fontSize:10, letterSpacing:3, color:'#475569', textTransform:'uppercase', marginBottom:14 }}>Relatório de Pagamentos</div>
+
+                  {/* Seletor de mês */}
+                  <div style={{ background:'#1e293b', borderRadius:12, padding:'12px 14px', marginBottom:14, border:'1px solid #334155', display:'flex', alignItems:'center', gap:10 }}>
+                    <span style={{ fontSize:13 }}>📅</span>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontSize:9, letterSpacing:2, color:'#475569', textTransform:'uppercase', marginBottom:4 }}>Competência</div>
+                      <input type="month" value={reportMonth} onChange={e=>{setReportMonth(e.target.value);setExpandedReport(null)}}
+                        style={{ background:'transparent', border:'none', color:'#f1f5f9', fontSize:14, fontWeight:800, fontFamily:"'Courier New',monospace", outline:'none', cursor:'pointer', width:'100%' }} />
+                    </div>
+                    <button onClick={()=>{const d=new Date();setReportMonth(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`);setExpandedReport(null)}}
+                      style={{ background:'#6366f120', border:'1px solid #6366f140', borderRadius:8, padding:'5px 10px', cursor:'pointer', fontSize:10, color:'#a5b4fc', fontFamily:'inherit', fontWeight:700, whiteSpace:'nowrap' }}>
+                      Mês atual
+                    </button>
+                  </div>
+
                   <div style={{ background:'linear-gradient(135deg,#1e293b,#0f172a)', borderRadius:16, padding:16, marginBottom:14, border:'1px solid #22c55e30' }}>
-                    <div style={{ fontSize:10, color:'#475569', textTransform:'uppercase', letterSpacing:2, marginBottom:6 }}>💰 Total a Pagar</div>
+                    <div style={{ fontSize:10, color:'#475569', textTransform:'uppercase', letterSpacing:2, marginBottom:6 }}>💰 Total a Pagar · {new Date(reportMonth+'-02').toLocaleDateString('pt-BR',{month:'long',year:'numeric'})}</div>
                     <div style={{ fontSize:30, fontWeight:900, color:'#22c55e' }}>
                       {fmt(employees.reduce((sum,emp)=>{
                         const st=getState(emp.id); const tw=(st.totalWork||0)+(st.workStart?now.getTime()-st.workStart.getTime():0)
-                        return sum+calcPayment(emp,st,tw).net
+                        return sum+calcPayment(emp,st,tw,reportMonth).net
                       },0))}
                     </div>
                     <div style={{ fontSize:11, color:'#16a34a', marginTop:4 }}>{employees.length} funcionário(s)</div>
@@ -1196,7 +1228,7 @@ function CompanyApp({ slug, onLogout }: { slug: string; onLogout: ()=>void }) {
                   {employees.map(emp=>{
                     const st=getState(emp.id)
                     const tw=(st.totalWork||0)+(st.workStart?now.getTime()-st.workStart.getTime():0)
-                    const pay=calcPayment(emp,st,tw)
+                    const pay=calcPayment(emp,st,tw,reportMonth)
                     const isOpen=expandedReport===emp.id
                     const isAddingDiscount=discountTarget===emp.id
                     const isAddingGratifHere=gratifTarget===emp.id&&isAddingGratif
@@ -1316,7 +1348,7 @@ function CompanyApp({ slug, onLogout }: { slug: string; onLogout: ()=>void }) {
                               ))}
                             </div>
                             <div style={{ display:'flex', gap:8 }}>
-                              <Btn full color="#6366f1" onClick={()=>generateHolerite(emp,getState(emp.id),pay)}>📄 Holerite PDF</Btn>
+                              <Btn full color="#6366f1" onClick={()=>generateHolerite(emp,getState(emp.id),pay,reportMonth)}>📄 Holerite PDF · {new Date(reportMonth+'-02').toLocaleDateString('pt-BR',{month:'short',year:'numeric'})}</Btn>
                             </div>
                           </div>
                         )}
