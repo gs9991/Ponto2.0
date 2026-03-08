@@ -170,9 +170,28 @@ function NavBar({tabs,active,onSelect}:{tabs:{key:string;icon:string;label:strin
   )
 }
 
+// ─── DARK TOKENS ─────────────────────────────────────────────────────────────
+const DARK = {
+  bg:        '#0F1117',
+  bgAlt:     '#161B27',
+  surface:   '#1E2433',
+  ink:       '#F1F5F9',
+  inkMid:    '#94A3B8',
+  inkLight:  '#475569',
+  inkXLight: '#334155',
+  border:    '#2A3148',
+  borderMid: '#3B4563',
+}
+
 // ─── COMPANY SELECT ───────────────────────────────────────────────────────────
 function CompanySelectScreen({onSelect}:{onSelect:(slug:string)=>void}){
   const [v,setV]=useState(''); const [err,setErr]=useState(''); const [load,setLoad]=useState(false)
+  const [dark,setDark]=useState(()=>localStorage.getItem('pontoTheme')==='dark')
+
+  const T = dark ? {...C, bg:DARK.bg, bgAlt:DARK.bgAlt, surface:DARK.surface, ink:DARK.ink, inkMid:DARK.inkMid, inkLight:DARK.inkLight, inkXLight:DARK.inkXLight, border:DARK.border, borderMid:DARK.borderMid} : C
+
+  const toggleTheme=()=>{ const next=!dark; setDark(next); localStorage.setItem('pontoTheme',next?'dark':'light') }
+
   const go=async()=>{
     const slug=v.trim().toLowerCase()
     if(!slug){setErr('Digite o código da empresa');return}
@@ -184,33 +203,47 @@ function CompanySelectScreen({onSelect}:{onSelect:(slug:string)=>void}){
     }catch{setErr('Erro ao conectar. Tente novamente.');setLoad(false)}
   }
   return (
-    <div style={{minHeight:'100vh',background:`linear-gradient(160deg, ${C.brandLt} 0%, #F0F4FF 40%, ${C.bg} 100%)`,display:'flex',justifyContent:'center',fontFamily:C.fb,position:'relative',overflow:'hidden'}}>
+    <div style={{minHeight:'100vh',background:dark?`linear-gradient(160deg, #1a1f35 0%, ${DARK.bg} 40%, #0a0d16 100%)`:`linear-gradient(160deg, ${C.brandLt} 0%, #F0F4FF 40%, ${C.bg} 100%)`,display:'flex',justifyContent:'center',fontFamily:C.fb,position:'relative',overflow:'hidden',transition:'background .3s'}}>
       {/* Decorative circles */}
-      <div style={{position:'absolute',top:-120,right:-80,width:400,height:400,borderRadius:'50%',background:`radial-gradient(circle, ${C.brand}12, transparent 70%)`,pointerEvents:'none'}}/>
-      <div style={{position:'absolute',bottom:-60,left:-60,width:300,height:300,borderRadius:'50%',background:`radial-gradient(circle, ${C.emerald}10, transparent 70%)`,pointerEvents:'none'}}/>
+      <div style={{position:'absolute',top:-120,right:-80,width:400,height:400,borderRadius:'50%',background:`radial-gradient(circle, ${C.brand}${dark?'20':'12'}, transparent 70%)`,pointerEvents:'none'}}/>
+      <div style={{position:'absolute',bottom:-60,left:-60,width:300,height:300,borderRadius:'50%',background:`radial-gradient(circle, ${C.emerald}${dark?'15':'10'}, transparent 70%)`,pointerEvents:'none'}}/>
+
+      {/* Theme Toggle */}
+      <button onClick={toggleTheme} style={{position:'absolute',top:20,right:20,zIndex:10,background:dark?DARK.surface:C.surface,border:`1.5px solid ${dark?DARK.border:C.border}`,borderRadius:50,padding:'8px 16px',cursor:'pointer',display:'flex',alignItems:'center',gap:8,fontFamily:C.fb,fontSize:12,fontWeight:700,color:dark?DARK.ink:C.inkMid,boxShadow:'0 2px 12px rgba(0,0,0,.12)',transition:'all .25s'}}>
+        <span style={{fontSize:16,transition:'transform .3s',display:'inline-block',transform:dark?'rotate(0deg)':'rotate(20deg)'}}>{dark?'🌙':'☀️'}</span>
+        <span>{dark?'Escuro':'Claro'}</span>
+      </button>
 
       <div style={{width:'100%',maxWidth:420,display:'flex',flexDirection:'column',justifyContent:'center',padding:'40px 24px',position:'relative',zIndex:1}}>
         <div style={{textAlign:'center',marginBottom:44,animation:"fadeUp .35s cubic-bezier(.22,1,.36,1) both"}}>
           <div style={{display:'inline-flex',alignItems:'center',justifyContent:'center',width:76,height:76,borderRadius:24,background:`linear-gradient(135deg,${C.brand},${C.brandDk})`,boxShadow:`0 8px 32px ${C.brandGlow}`,marginBottom:22}}>
             <span style={{fontSize:34,filter:'grayscale(0)'}}>⏱</span>
           </div>
-          <div style={{fontFamily:C.ff,fontSize:34,fontWeight:900,color:C.ink,letterSpacing:'-0.03em',lineHeight:1.1}}>PontoApp</div>
-          <div style={{fontFamily:C.fb,fontSize:14,color:C.inkMid,marginTop:8,fontWeight:400,fontStyle:'italic'}}>Controle de ponto inteligente</div>
+          <div style={{fontFamily:C.ff,fontSize:34,fontWeight:900,color:T.ink,letterSpacing:'-0.03em',lineHeight:1.1,transition:'color .3s'}}>PontoApp</div>
+          <div style={{fontFamily:C.fb,fontSize:14,color:T.inkMid,marginTop:8,fontWeight:400,fontStyle:'italic',transition:'color .3s'}}>Controle de ponto inteligente</div>
         </div>
 
-        <Card style={{boxShadow:'0 8px 40px rgba(91,76,245,.10)',animation:'fadeUp .4s .1s cubic-bezier(.22,1,.36,1) both'}}>
+        <div style={{background:T.surface,borderRadius:18,border:`1px solid ${T.border}`,boxShadow:dark?'0 8px 40px rgba(0,0,0,.4)':'0 8px 40px rgba(91,76,245,.10)',padding:20,animation:'fadeUp .4s .1s cubic-bezier(.22,1,.36,1) both',transition:'background .3s, border-color .3s'}}>
           <div style={{marginBottom:22}}>
-            <div style={{fontFamily:C.ff,fontSize:20,fontWeight:700,color:C.ink,marginBottom:4}}>Acessar empresa</div>
-            <div style={{fontFamily:C.fb,fontSize:13,color:C.inkMid}}>Digite o código fornecido pelo seu gestor.</div>
+            <div style={{fontFamily:C.ff,fontSize:20,fontWeight:700,color:T.ink,marginBottom:4,transition:'color .3s'}}>Acessar empresa</div>
+            <div style={{fontFamily:C.fb,fontSize:13,color:T.inkMid,transition:'color .3s'}}>Digite o código fornecido pelo seu gestor.</div>
           </div>
-          <Input label="Código da empresa" value={v} onChange={setV} placeholder="ex: minhaempresa" error={err} autoFocus />
-          <button onClick={go} disabled={load} style={{width:'100%',padding:'15px',borderRadius:12,border:'none',background:load?C.border:`linear-gradient(135deg,${C.brand},${C.brandDk})`,color:load?C.inkLight:'#fff',fontSize:15,fontWeight:700,fontFamily:C.ff,cursor:load?'wait':'pointer',boxShadow:load?'none':`0 6px 24px ${C.brandGlow}`,letterSpacing:'0.01em',transition:'all .2s'}}>
+          <div style={{marginBottom:16}}>
+            <div style={{fontFamily:C.fb,fontSize:11,fontWeight:700,color:T.inkMid,letterSpacing:'0.06em',textTransform:'uppercase',marginBottom:7}}>Código da empresa</div>
+            <input autoFocus value={v} onChange={e=>setV(e.target.value)} onKeyDown={e=>e.key==='Enter'&&go()} placeholder="ex: minhaempresa"
+              style={{width:'100%',background:dark?DARK.bgAlt:C.bg,border:`1.5px solid ${err?C.rose:T.border}`,borderRadius:10,padding:'12px 14px',color:T.ink,fontSize:14,fontFamily:C.fb,outline:'none',transition:'all .2s'}}
+              onFocus={e=>{e.target.style.borderColor=err?C.rose:C.brand;e.target.style.boxShadow=`0 0 0 3px ${err?C.roseLt:C.brandGlow}`}}
+              onBlur={e=>{e.target.style.borderColor=err?C.rose:T.border;e.target.style.boxShadow='none'}}
+            />
+            {err&&<p style={{fontFamily:C.fb,fontSize:11,color:C.rose,margin:'5px 0 0',fontWeight:500}}>⚠ {err}</p>}
+          </div>
+          <button onClick={go} disabled={load} style={{width:'100%',padding:'15px',borderRadius:12,border:'none',background:load?T.border:`linear-gradient(135deg,${C.brand},${C.brandDk})`,color:load?T.inkLight:'#fff',fontSize:15,fontWeight:700,fontFamily:C.ff,cursor:load?'wait':'pointer',boxShadow:load?'none':`0 6px 24px ${C.brandGlow}`,letterSpacing:'0.01em',transition:'all .2s'}}>
             {load?'Verificando…':'Entrar →'}
           </button>
-        </Card>
+        </div>
 
         <div style={{textAlign:'center',marginTop:20}}>
-          <button onClick={()=>onSelect('__superadmin__')} style={{background:'none',border:'none',cursor:'pointer',fontFamily:C.fb,fontSize:12,color:C.inkXLight}}>Acesso administrativo</button>
+          <button onClick={()=>onSelect('__superadmin__')} style={{background:'none',border:'none',cursor:'pointer',fontFamily:C.fb,fontSize:12,color:T.inkXLight}}>Acesso administrativo</button>
         </div>
       </div>
     </div>
