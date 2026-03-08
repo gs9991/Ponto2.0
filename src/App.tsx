@@ -383,12 +383,14 @@ export default function PontoApp() {
 
     let overtimeMs = 0
     let overtimeValue = 0
+    const overtimeByRate: Record<number, number> = {} // rate -> ms
     Object.entries(state.dailyWork || {}).forEach(([date, ms]) => {
       const extra = Math.max(0, ms - journeyMs)
       if (extra > 0) {
         const rate = (state.dailyOvertimeRate || {})[date] ?? defaultRate
         overtimeMs += extra
         overtimeValue += (extra / 3600000) * hourValue * (1 + rate / 100)
+        overtimeByRate[rate] = (overtimeByRate[rate] || 0) + extra
       }
     })
     const regularMs = Math.max(0, totalMs - overtimeMs)
@@ -412,7 +414,7 @@ export default function PontoApp() {
     const totalDeductions = autoDeductions + manualDiscountTotal
     const net = Math.max(0, grossValue - totalDeductions)
 
-    return { totalHours, totalMs, daysWorked, paidOffDays, totalPaidDays, grossValue, autoDeductions, manualDiscountTotal, totalDeductions, net, breakHours, breakMs: totalBreakMs, overtimeMs, nightMs, nightBonus, overtimeRate }
+    return { totalHours, totalMs, daysWorked, paidOffDays, totalPaidDays, grossValue, autoDeductions, manualDiscountTotal, totalDeductions, net, breakHours, breakMs: totalBreakMs, overtimeMs, overtimeByRate, nightMs, nightBonus, overtimeRate }
   }
 
   // ── Employee CRUD ─────────────────────────────────────────────────────────
@@ -846,15 +848,19 @@ export default function PontoApp() {
                         <div style={{ fontSize: 14, fontWeight: 800, color }}>{val}</div>
                       </div>
                     ))}
-                    {empPayment.overtimeMs > 0 && (
-                      <div style={{ background: '#f59e0b10', borderRadius: 12, padding: '12px 14px', border: '1px solid #f59e0b30', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <div>
-                          <div style={{ fontSize: 12, color: '#94a3b8', fontWeight: 600 }}>⚡ Horas Extras</div>
-                          <div style={{ fontSize: 10, color: '#475569', marginTop: 2 }}>+{empPayment.overtimeRate}% · {formatHours(empPayment.overtimeMs)}</div>
-                        </div>
-                        <div style={{ fontSize: 14, fontWeight: 800, color: '#f59e0b' }}>+{fmt((empPayment.overtimeMs / 3600000) * (myEmpData.payType === 'hour' ? myEmpData.payValue : myEmpData.payValue / myEmpData.hoursPerDay) * (empPayment.overtimeRate / 100))}</div>
-                      </div>
-                    )}
+                    {empPayment.overtimeMs > 0 && Object.entries(empPayment.overtimeByRate).sort(([a],[b]) => Number(a)-Number(b)).map(([rate, ms]) => {
+                        const hv = myEmpData.payType === 'hour' ? myEmpData.payValue : myEmpData.payValue / myEmpData.hoursPerDay
+                        const bonus = ((ms as number) / 3600000) * hv * (Number(rate) / 100)
+                        return (
+                          <div key={rate} style={{ background: '#f59e0b10', borderRadius: 12, padding: '12px 14px', border: '1px solid #f59e0b30', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                              <div style={{ fontSize: 12, color: '#94a3b8', fontWeight: 600 }}>⚡ Horas Extras (+{rate}%)</div>
+                              <div style={{ fontSize: 10, color: '#475569', marginTop: 2 }}>{formatHours(ms as number)}</div>
+                            </div>
+                            <div style={{ fontSize: 14, fontWeight: 800, color: '#f59e0b' }}>+{fmt(bonus)}</div>
+                          </div>
+                        )
+                      })}
                     {empPayment.nightMs > 0 && (
                       <div style={{ background: '#6366f110', borderRadius: 12, padding: '12px 14px', border: '1px solid #6366f130', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <div>
@@ -1101,12 +1107,12 @@ export default function PontoApp() {
                                   <span style={{ fontSize: 12, fontWeight: 700, color }}>{val}</span>
                                 </div>
                               ))}
-                              {pay.overtimeMs > 0 && (
-                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 10px', background: '#f59e0b10', borderRadius: 8, border: '1px solid #f59e0b30' }}>
-                                  <span style={{ fontSize: 11, color: '#94a3b8' }}>⚡ Horas Extras (+{pay.overtimeRate}%)</span>
-                                  <span style={{ fontSize: 12, fontWeight: 700, color: '#f59e0b' }}>{formatHours(pay.overtimeMs)}</span>
+                              {pay.overtimeMs > 0 && Object.entries(pay.overtimeByRate).sort(([a],[b]) => Number(a)-Number(b)).map(([rate, ms]) => (
+                                <div key={rate} style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 10px', background: '#f59e0b10', borderRadius: 8, border: '1px solid #f59e0b30' }}>
+                                  <span style={{ fontSize: 11, color: '#94a3b8' }}>⚡ Horas Extras (+{rate}%)</span>
+                                  <span style={{ fontSize: 12, fontWeight: 700, color: '#f59e0b' }}>{formatHours(ms as number)}</span>
                                 </div>
-                              )}
+                              ))}
                               {pay.nightMs > 0 && (
                                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 10px', background: '#6366f110', borderRadius: 8, border: '1px solid #6366f130' }}>
                                   <span style={{ fontSize: 11, color: '#94a3b8' }}>🌙 Adicional Noturno (+20%)</span>
