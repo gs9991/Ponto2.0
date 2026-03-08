@@ -80,7 +80,7 @@ const tColor: Record<string,string>  = {entrada:C.emerald,saida:C.rose,inicio_pa
 interface Discount   { id:number;value:number;reason:string;date:string }
 interface Company    { name:string;cnpj:string;address:string;phone:string;email:string;logo:string }
 interface CompanyMeta{ slug:string;name:string;adminUsername:string;adminPassword:string;createdAt:string }
-interface Employee   { id:number;name:string;role:string;username:string;password:string;avatar:string;payType:'day'|'hour';payValue:number;hoursPerDay:number;overtimeRate:50|70|100;discounts:Discount[];gratifications:Discount[];cpf?:string;admission?:string;fgts?:boolean;companySlug:string }
+interface Employee   { id:number;name:string;role:string;username:string;password:string;avatar:string;payType:'month'|'day'|'hour';payValue:number;hoursPerDay:number;overtimeRate:50|70|100;discounts:Discount[];gratifications:Discount[];cpf?:string;admission?:string;fgts?:boolean;inss?:boolean;irrf?:boolean;regime?:'clt'|'pj'|'avulso';companySlug:string }
 interface LogEntry   { type:string;time:Date }
 type AbsenceType = 'paid'|'unpaid'|'medical'|'justified'|'holiday'|'compensatory'|'bank_in'
 interface EmpState   { status:string;log:LogEntry[];workStart:Date|null;breakStart:Date|null;totalWork:number;totalBreak:number;days:string[];dailyWork:Record<string,number>;dailyOff:Record<string,AbsenceType>;dailyNight:Record<string,number>;dailyOvertimeRate:Record<string,number>;bankBalance:number }
@@ -96,6 +96,46 @@ const ABSENCE_CONFIG: Record<AbsenceType,{label:string;emoji:string;color:string
   bank_in:     {label:'Banco de Horas',  emoji:'🏦',color:'#6366F1',colorLt:'#EEF2FF',paga:false,contaDSR:false,descontaDia:false,descricao:'Horas extras creditadas no banco de horas'},
 }
 interface User       { id:number;name:string;username:string;avatar:string;role:string;payType:'day'|'hour';payValue:number;hoursPerDay:number;discounts:Discount[];companySlug?:string }
+
+// ─── Tabelas Fiscais 2025 ────────────────────────────────────────────────────
+// INSS empregado — tabela progressiva 2025
+const INSS_TABLE=[
+  {max:1518.00,  rate:0.075},
+  {max:2793.88,  rate:0.090},
+  {max:4190.83,  rate:0.120},
+  {max:8157.41,  rate:0.140},
+]
+function calcINSS(gross:number):number{
+  let inss=0,prev=0
+  for(const fx of INSS_TABLE){
+    if(gross<=0) break
+    const base=Math.min(gross,fx.max)-prev
+    if(base<=0){prev=fx.max;continue}
+    inss+=base*fx.rate
+    prev=fx.max
+    if(gross<=fx.max) break
+  }
+  // teto: acima do último teto, aplica 14% sobre o excedente até o teto máximo INSS
+  if(gross>8157.41) inss+=(Math.min(gross,8157.41)-8157.41)*0.14 // já coberto
+  return Math.round(inss*100)/100
+}
+
+// IRRF 2025 — base = bruto - INSS - dependentes(R$189,59/dep)
+const IRRF_TABLE=[
+  {max:2259.20,  rate:0,    deduct:0},
+  {max:2826.65,  rate:0.075,deduct:169.44},
+  {max:3751.05,  rate:0.150,deduct:381.44},
+  {max:4664.68,  rate:0.225,deduct:662.77},
+  {max:Infinity, rate:0.275,deduct:896.00},
+]
+function calcIRRF(baseCalc:number,dependentes=0):number{
+  const dedDep=dependentes*189.59
+  const base=Math.max(0,baseCalc-dedDep)
+  for(const fx of IRRF_TABLE){
+    if(base<=fx.max) return Math.max(0,Math.round((base*fx.rate-fx.deduct)*100)/100)
+  }
+  return 0
+}
 
 function calcNightMs(s:number,e:number){ let n=0; for(let t=s;t<e;t+=60000){ const h=new Date(t).getHours(); if(h>=22||h<5)n+=60000 }; return n }
 
@@ -499,91 +539,131 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
   }
 
   const calcPay=(emp:Employee,st:EmpState,lw:number,mf?:string)=>{
-    const hv=emp.payType==='hour'?emp.payValue:emp.payValue/emp.hoursPerDay
-    const jMs=emp.hoursPerDay*3600000
+    // ── valor hora base ──
+    const salMes = emp.payType==='month' ? emp.payValue : 0
+    const hv = emp.payType==='hour' ? emp.payValue
+             : emp.payType==='day'  ? emp.payValue/emp.hoursPerDay
+             : emp.payValue/(emp.hoursPerDay*22) // mensal: ÷ 220h (22 dias úteis × 10h, ou seja ÷ dias*h)
+    const hvMes = emp.payType==='month' ? emp.payValue/(emp.hoursPerDay*22) : hv
+    const jMs = emp.hoursPerDay*3600000
+    const salDia = emp.payType==='month' ? emp.payValue/30
+                 : emp.payType==='day'   ? emp.payValue
+                 : emp.payValue*emp.hoursPerDay
 
-    // Horas trabalhadas por dia
+    // ── horas do período ──
     const allD={...(st.dailyWork||{})}
     if(!mf&&st.status!==STATUS.OUT){const t=TODAY();allD[t]=(allD[t]||0)+(st.workStart?now.getTime()-st.workStart.getTime():0)}
     const fd=mf?Object.fromEntries(Object.entries(allD).filter(([d])=>d.startsWith(mf))):allD
     const fo=mf?Object.fromEntries(Object.entries(st.dailyOff||{}).filter(([d])=>d.startsWith(mf))):(st.dailyOff||{})
     const fn=mf?Object.fromEntries(Object.entries(st.dailyNight||{}).filter(([d])=>d.startsWith(mf))):(st.dailyNight||{})
 
-    // Horas normais, extras e banco de horas
-    let regMs=0,otR:Record<number,number>={},bankCreditMs=0
+    // ── calcular horas normais, extras e banco ──
+    let regMs=0, otR:Record<number,number>={}, bankCreditMs=0
     Object.entries(fd).forEach(([date,ms])=>{
-      const absType=fo[date]
-      if(absType==='bank_in'){
-        // Hora extra vai pro banco, não paga em dinheiro
-        const ot=Math.max(0,(ms as number)-jMs)
-        bankCreditMs+=ot
+      if(fo[date]==='bank_in'){
+        bankCreditMs+=Math.max(0,(ms as number)-jMs)
         regMs+=Math.min(ms as number,jMs)
       } else {
-        const reg=Math.min(ms as number,jMs),ot=Math.max(0,(ms as number)-jMs)
+        const reg=Math.min(ms as number,jMs), ot=Math.max(0,(ms as number)-jMs)
         regMs+=reg
         if(ot>0){const r=(st.dailyOvertimeRate||{})[date]??(emp.overtimeRate||50);otR[r]=(otR[r]||0)+ot}
       }
     })
 
-    // Dias efetivamente trabalhados
-    const workedDays=Object.keys(fd).filter(d=>(fd[d]||0)>0)
-    const dw=workedDays.length+(!mf&&st.status!==STATUS.OUT?1:0)
-
-    // Dias pagos por ausência (folga paga, atestado, feriado, compensatória)
+    // ── dias trabalhados e ausências ──
+    const dw=Object.keys(fd).filter(d=>(fd[d]||0)>0).length+(!mf&&st.status!==STATUS.OUT?1:0)
     const paidAbsDays=Object.entries(fo).filter(([date,absType])=>ABSENCE_CONFIG[absType]?.paga&&!(fd[date]&&(fd[date] as number)>0)).length
+    const deductedDays=Object.values(fo).filter(v=>ABSENCE_CONFIG[v]?.descontaDia).length
 
-    // ── DSR (Descanso Semanal Remunerado) ──
-    // Faltas injustificadas na semana cortam o DSR do domingo daquela semana
-    // DSR = salário_diário. Para cada semana com falta injustificada, -1 DSR
+    // ── DSR proporcional ──
+    // Agrupa faltas injustificadas por semana; desconta 1 DSR por semana afetada
+    // DSR integra HE habituais: (salDia + mediaHEsemanal) × semanasAfetadas
     let dsrDeduction=0
-    if(emp.payType==='day'){
-      // Agrupar faltas injustificadas por semana
-      const injustWeeks=new Set<string>()
+    if(emp.payType!=='hour'){
+      const injustWeeks=new Map<string,number>() // weekKey → total OT ms naquela semana
       Object.entries(fo).forEach(([date,absType])=>{
         if(ABSENCE_CONFIG[absType]?.contaDSR){
           const d=new Date(date+'T12:00:00')
-          const weekStart=new Date(d);weekStart.setDate(d.getDate()-d.getDay())
-          injustWeeks.add(weekStart.toISOString().split('T')[0])
+          const ws=new Date(d);ws.setDate(d.getDate()-d.getDay())
+          const wk=ws.toISOString().split('T')[0]
+          if(!injustWeeks.has(wk)) injustWeeks.set(wk,0)
         }
       })
-      dsrDeduction=injustWeeks.size*emp.payValue
+      // acumula OT por semana para integrar no DSR
+      Object.entries(otR).forEach(([,ms])=>{
+        // distribui igualmente pelas semanas afetadas (aproximação)
+        if(injustWeeks.size>0) injustWeeks.forEach((_,wk)=>injustWeeks.set(wk,(injustWeeks.get(wk)||0)+(ms as number)/injustWeeks.size))
+      })
+      injustWeeks.forEach((otMs)=>{
+        const dsrBase=salDia+(otMs>0?(otMs/3600000)*hvMes*1.5/6:0) // integração HE no DSR
+        dsrDeduction+=dsrBase
+      })
     }
 
-    // ── Desconto de dias (faltas que descontam) ──
-    const deductedDays=Object.values(fo).filter(v=>ABSENCE_CONFIG[v]?.descontaDia).length
-    const absDeduction=emp.payType==='day'?deductedDays*emp.payValue:(deductedDays*emp.hoursPerDay*hv)
+    // ── desconto de faltas ──
+    const absDeduction = emp.payType==='month'
+      ? deductedDays*salDia                         // mensal: desconta por dia
+      : emp.payType==='day'
+        ? deductedDays*emp.payValue
+        : deductedDays*emp.hoursPerDay*hv
 
+    // ── totais de horas ──
     const totalMs=mf?Object.values(fd).reduce((a,b)=>a+(b as number),0):lw
     const brkMs=mf?0:(st.totalBreak||0)+(st.breakStart?now.getTime()-st.breakStart.getTime():0)
     const otMs=Object.values(otR).reduce((a,b)=>a+b,0)
 
-    // Valor base
-    let rv=0,ov=0
-    if(emp.payType==='hour') rv=(regMs/3600000)*hv
-    else rv=(dw+paidAbsDays)*emp.payValue
+    // ── valor bruto ──
+    let rv=0, ov=0
+    if(emp.payType==='month'){
+      // Salário mensal fixo + abono de dias de ausência paga (já inclusos no mês)
+      // desconto de faltas é feito em absDeduction
+      rv=salMes
+    } else if(emp.payType==='hour'){
+      rv=((regMs+paidAbsDays*emp.hoursPerDay*3600000)/3600000)*hv
+    } else {
+      rv=(dw+paidAbsDays)*emp.payValue
+    }
 
-    // Hora extra em dinheiro
-    Object.entries(otR).forEach(([r,ms])=>{ov+=(ms as number)/3600000*hv*(1+Number(r)/100)})
+    // hora extra
+    Object.entries(otR).forEach(([r,ms])=>{ov+=(ms as number)/3600000*hvMes*(1+Number(r)/100)})
 
-    // Adicional noturno
-    const nMs=Object.values(fn).reduce((a:number,b)=>a+(b as number),0),nb=(nMs/3600000)*hv*0.20
+    // adicional noturno (20%)
+    const nMs=Object.values(fn).reduce((a:number,b)=>a+(b as number),0)
+    const nb=(nMs/3600000)*hvMes*0.20
 
+    // FGTS (8% — encargo da empresa, exibido no holerite mas não desconta do líquido)
+    const fgtsV = emp.fgts ? (rv+ov+nb)*0.08 : 0
+
+    // Bruto para cálculos fiscais
     const gross=rv+ov+nb
+
+    // ── INSS (desconto do empregado) ──
+    const inssV = emp.inss ? calcINSS(gross) : 0
+
+    // ── IRRF (base = bruto - INSS) ──
+    const irrfV = emp.irrf ? calcIRRF(gross-inssV) : 0
+
+    // ── descontos manuais e gratificações ──
     const disc=(emp.discounts||[]).reduce((s,d)=>s+d.value,0)
     const grat=(emp.gratifications||[]).reduce((s,g)=>s+g.value,0)
-    const autoDeduct=dsrDeduction+absDeduction
+
+    const autoDeduct=dsrDeduction+absDeduction+inssV+irrfV
     const totalDeductions=disc+autoDeduct
 
     return{
-      totalMs,daysWorked:dw,grossValue:gross,
-      autoDeductions:autoDeduct,dsrDeduction,absDeduction,deductedDays,
-      manualDiscountTotal:disc,totalDeductions,
+      totalMs, daysWorked:dw, grossValue:gross,
+      regularValue:rv, overtimeValue:ov,
+      overtimeMs:otMs, overtimeByRate:otR,
+      nightMs:nMs, nightBonus:nb,
+      paidAbsDays, deductedDays,
+      absDeduction, dsrDeduction,
+      inssV, irrfV, fgtsV,
+      autoDeductions:autoDeduct,
+      manualDiscountTotal:disc, totalDeductions,
+      gratificationsTotal:grat,
       net:Math.max(0,gross-totalDeductions)+grat,
-      breakMs:brkMs,overtimeMs:otMs,overtimeByRate:otR,
-      nightMs:nMs,nightBonus:nb,gratificationsTotal:grat,
-      regularValue:rv,overtimeValue:ov,
-      bankCreditMs,bankBalance:st.bankBalance||0,
-      paidAbsDays,
+      breakMs:brkMs,
+      bankCreditMs, bankBalance:st.bankBalance||0,
     }
   }
 
@@ -592,14 +672,14 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
   const saveEmp=async()=>{
     const e=valForm();if(Object.keys(e).length){setFErr(e);return}
     const ini=form.name.split(' ').map((w:string)=>w[0]).join('').slice(0,2).toUpperCase()
-    const data={name:form.name,role:form.role,username:form.username,avatar:ini,payType:form.payType as 'day'|'hour',payValue:Number(form.payValue),hoursPerDay:Number(form.hoursPerDay)||8,overtimeRate:Number(form.overtimeRate) as 50|70|100,cpf:form.cpf||'',admission:form.admission||'',fgts:form.fgts||false,companySlug:slug,...(form.password?{password:form.password}:{})}
+    const data={name:form.name,role:form.role,username:form.username,avatar:ini,payType:form.payType as 'month'|'day'|'hour',payValue:Number(form.payValue),hoursPerDay:Number(form.hoursPerDay)||8,overtimeRate:Number(form.overtimeRate) as 50|70|100,cpf:form.cpf||'',admission:form.admission||'',regime:(form.regime||'clt') as 'clt'|'pj'|'avulso',fgts:form.fgts||false,inss:form.inss||false,irrf:form.irrf||false,companySlug:slug,...(form.password?{password:form.password}:{})}
     if(editEmp){await setDoc(doc(db,ec,String(editEmp.id)),{...editEmp,...data});setOk('Funcionário atualizado!')}
     else{const id=Date.now();await setDoc(doc(db,ec,String(id)),{id,password:form.password,discounts:[],gratifications:[],...data});setOk('Funcionário cadastrado!')}
     setTimeout(()=>setOk(''),3000)
-    setForm({name:'',role:'',username:'',password:'',payType:'day',payValue:'',hoursPerDay:'8',overtimeRate:'50',cpf:'',admission:'',fgts:false});setFErr({});setEditEmp(null);setAv('list')
+    setForm({name:'',role:'',username:'',password:'',payType:'month',payValue:'',hoursPerDay:'8',overtimeRate:'50',cpf:'',admission:'',regime:'clt',fgts:true,inss:true,irrf:true});setFErr({});setEditEmp(null);setAv('list')
   }
   const delEmp=async(id:number)=>{await deleteDoc(doc(db,ec,String(id)));await deleteDoc(doc(db,rc,String(id)))}
-  const startEdit=(emp:Employee)=>{setEditEmp(emp);setForm({name:emp.name,role:emp.role,username:emp.username,password:'',payType:emp.payType,payValue:String(emp.payValue),hoursPerDay:String(emp.hoursPerDay),overtimeRate:String(emp.overtimeRate||50),cpf:emp.cpf||'',admission:emp.admission||'',fgts:emp.fgts||false});setFErr({});setAv('edit')}
+  const startEdit=(emp:Employee)=>{setEditEmp(emp);setForm({name:emp.name,role:emp.role,username:emp.username,password:'',payType:emp.payType,payValue:String(emp.payValue),hoursPerDay:String(emp.hoursPerDay),overtimeRate:String(emp.overtimeRate||50),cpf:emp.cpf||'',admission:emp.admission||'',regime:emp.regime||'clt',fgts:emp.fgts||false,inss:emp.inss||false,irrf:emp.irrf||false});setFErr({});setAv('edit')}
 
   const addDisc=async(eid:number)=>{setDerr('');if(!dform.value||isNaN(Number(dform.value))||Number(dform.value)<=0){setDerr('Valor inválido');return}if(!dform.reason.trim()){setDerr('Informe o motivo');return};const emp=employees.find(e=>e.id===eid);if(!emp)return;const d:Discount={id:Date.now(),value:Number(dform.value),reason:dform.reason.trim(),date:fmtDs(new Date())};await setDoc(doc(db,ec,String(eid)),{...emp,discounts:[...(emp.discounts||[]),d]});setDform({value:'',reason:''});setDtgt(null)}
   const remDisc=async(eid:number,did:number)=>{const emp=employees.find(e=>e.id===eid);if(!emp)return;await setDoc(doc(db,ec,String(eid)),{...emp,discounts:emp.discounts.filter(d=>d.id!==did)})}
@@ -794,17 +874,14 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
     txt('VALOR (R$)', mg+cW-2, y+4.8, {size:6.5,bold:true,color:'#881337',align:'right'})
     y+=9
 
-    const fgtsV=emp.fgts?pay.grossValue*0.08:0
-    const ded:[string,string,string][]=[...( emp.discounts||[]).map(d=>[d.reason,d.date,fmt(d.value)] as [string,string,string])]
-    if(emp.fgts) ded.push(['FGTS (8% sobre bruto)', '—', fmt(fgtsV)])
-
-    // Descontos automáticos (DSR e faltas)
-    if(pay.dsrDeduction>0){
-      ded.unshift(['DSR — Descanso Semanal (faltas injustif.)',`${pay.deductedDays||0} sem.`,fmt(pay.dsrDeduction)])
-    }
-    if(pay.absDeduction>0){
-      ded.unshift(['Desconto de dias não trabalhados',`${pay.deductedDays} dia(s)`,fmt(pay.absDeduction)])
-    }
+    // ── descontos legais automáticos ──
+    const ded:[string,string,string][]=[]
+    if(pay.absDeduction>0)  ded.push([`Desconto de faltas (${pay.deductedDays} dia(s))`,'Auto',fmt(pay.absDeduction)])
+    if(pay.dsrDeduction>0)  ded.push(['Desc. DSR — faltas injustificadas','Auto',fmt(pay.dsrDeduction)])
+    if(pay.inssV>0)         ded.push(['INSS — Contrib. Previdenciária','Progressive',fmt(pay.inssV)])
+    if(pay.irrfV>0)         ded.push(['IRRF — Imposto de Renda Retido','Tabela 2025',fmt(pay.irrfV)])
+    // descontos manuais
+    ;(emp.discounts||[]).forEach(d=>ded.push([d.reason,d.date,fmt(d.value)]))
 
     if(ded.length===0){
       box(mg, y, cW, 9, '#FFF8F8', undefined, 0)
@@ -815,50 +892,56 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
         box(mg, y, cW, 7.5, i%2===0?'#FFF8F8':'#FFFFFF', undefined, 0)
         line(mg, y, mg+cW, '#FDE8EC')
         txt(row[0], mg+5, y+5, {size:8,color:'#334155'})
-        txt(row[1], mg+cW*0.55, y+5, {size:7.5,color:'#64748B'})
+        txt(row[1], mg+cW*0.55, y+5, {size:7,color:'#64748B'})
         txt(`- ${row[2]}`, mg+cW-3, y+5, {size:8,bold:true,color:'#E11D48',align:'right'})
         y+=7.5
       })
       line(mg, y, mg+cW, '#FECDD3')
     }
 
+    // FGTS — encargo da empresa (informativo)
+    if(pay.fgtsV>0){
+      y+=2
+      box(mg, y, cW, 8, '#EFF6FF', '#BFDBFE', 1)
+      txt('FGTS — Encargo da empresa (8%) — não desconta do líquido', mg+5, y+5.5, {size:7.5,color:'#1D4ED8'})
+      txt(fmt(pay.fgtsV), mg+cW-3, y+5.5, {size:8,bold:true,color:'#1D4ED8',align:'right'})
+      y+=10
+    }
+
     // Banco de horas
     if(pay.bankBalance>0){
-      y+=2
-      box(mg, y, cW, 9, '#EEF2FF', '#C7D2FE', 1)
-      txt('🏦  BANCO DE HORAS ACUMULADO', mg+5, y+6, {size:8,bold:true,color:'#4338CA'})
+      box(mg, y, cW, 8, '#EEF2FF', '#C7D2FE', 1)
+      txt('Banco de Horas acumulado', mg+5, y+5.5, {size:7.5,color:'#4338CA'})
       const bH=Math.floor(pay.bankBalance/3600000),bM=Math.floor((pay.bankBalance%3600000)/60000)
-      txt(`${bH}h${String(bM).padStart(2,'0')} disponíveis`, mg+cW-3, y+6, {size:8,bold:true,color:'#4338CA',align:'right'})
-      y+=12
+      txt(`${bH}h${String(bM).padStart(2,'0')} disponíveis`, mg+cW-3, y+5.5, {size:8,bold:true,color:'#4338CA',align:'right'})
+      y+=10
     }
 
     // Total descontos
     box(mg, y, cW, 9, '#FFE4E6', '#FECDD3', 0)
     txt('TOTAL DE DESCONTOS', mg+5, y+6, {size:8.5,bold:true,color:'#881337'})
-    txt(`- ${fmt(pay.totalDeductions+fgtsV)}`, mg+cW-3, y+6, {size:10,bold:true,color:'#E11D48',align:'right'})
+    txt(`- ${fmt(pay.totalDeductions)}`, mg+cW-3, y+6, {size:10,bold:true,color:'#E11D48',align:'right'})
     y+=14
 
     // ══════════════════════════════════════════════════════════
-    // PAINEL LÍQUIDO — destaque principal
+    // PAINEL LÍQUIDO
     // ══════════════════════════════════════════════════════════
-    // Fundo com gradiente simulado (2 retângulos)
     box(mg, y, cW, 22, '#1E3A5F', undefined, 2)
     box(mg, y, cW*0.55, 22, '#0F2444', undefined, 2)
     box(mg, y, 4, 22, '#5B4CF5', undefined, 0)
     vline(mg+cW*0.55, y+3, y+19, '#2563EB', 0.4)
 
     txt('VALOR LÍQUIDO A RECEBER', mg+8, y+8, {size:8,bold:true,color:'#93C5FD'})
-    txt(fmt(pay.net-fgtsV), mg+8, y+17, {size:16,bold:true,color:'#FFFFFF'})
+    txt(fmt(pay.net), mg+8, y+17, {size:16,bold:true,color:'#FFFFFF'})
 
-    // Mini breakdown no lado direito
     const bkX=mg+cW*0.55+5
     txt('Bruto', bkX, y+7, {size:6.5,color:'#94A3B8'})
     txt(fmt(pay.grossValue), bkX+32, y+7, {size:7,bold:true,color:'#BFDBFE',align:'right'})
     txt('Descontos', bkX, y+12, {size:6.5,color:'#94A3B8'})
-    txt(`- ${fmt(pay.totalDeductions+fgtsV)}`, bkX+32, y+12, {size:7,bold:true,color:'#FCA5A5',align:'right'})
+    txt(`- ${fmt(pay.totalDeductions)}`, bkX+32, y+12, {size:7,bold:true,color:'#FCA5A5',align:'right'})
     line(bkX, y+14.5, mg+cW-4, '#2563EB', 0.3)
     txt('Líquido', bkX, y+18.5, {size:7,bold:true,color:'#BFDBFE'})
-    txt(fmt(pay.net-fgtsV), bkX+32, y+18.5, {size:7.5,bold:true,color:'#6EE7B7',align:'right'})
+    txt(fmt(pay.net), bkX+32, y+18.5, {size:7.5,bold:true,color:'#6EE7B7',align:'right'})
     y+=28
 
     // ══════════════════════════════════════════════════════════
@@ -1048,9 +1131,11 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
                   {label:'📅 Dias trabalhados',val:myPay.daysWorked+' dia(s)',sub:'',c:C.sky},
                   {label:'💵 Bruto',val:fmt(myPay.grossValue),sub:'',c:C.brand},
                   ...(myPay.nightMs>0?[{label:'🌙 Noturno',val:fmt(myPay.nightBonus),sub:'+20%',c:'#7C3AED'}]:[]),
-                  ...(myPay.dsrDeduction>0?[{label:'📉 Desconto DSR',val:'- '+fmt(myPay.dsrDeduction),sub:'faltas injustif.',c:C.rose}]:[]),
-                  ...(myPay.absDeduction>0?[{label:'📉 Faltas desc.',val:'- '+fmt(myPay.absDeduction),sub:myPay.deductedDays+' dia(s)',c:C.rose}]:[]),
-                  ...(myPay.bankBalance>0?[{label:'🏦 Banco de horas',val:fmtHM(myPay.bankBalance),sub:'disponível',c:'#6366F1'}]:[]),
+                  ...(myPay.dsrDeduction>0?[{label:'📉 Desc. DSR',val:'- '+fmt(myPay.dsrDeduction),sub:'faltas injustif.',c:C.rose}]:[]),
+                  ...(myPay.absDeduction>0?[{label:'📉 Faltas',val:'- '+fmt(myPay.absDeduction),sub:myPay.deductedDays+' dia(s)',c:C.rose}]:[]),
+                  ...(myPay.inssV>0?[{label:'🏛 INSS',val:'- '+fmt(myPay.inssV),sub:'previdência',c:C.rose}]:[]),
+                  ...(myPay.irrfV>0?[{label:'📊 IRRF',val:'- '+fmt(myPay.irrfV),sub:'imp. de renda',c:C.rose}]:[]),
+                  ...(myPay.bankBalance>0?[{label:'🏦 Banco hrs',val:fmtHM(myPay.bankBalance),sub:'disponível',c:'#6366F1'}]:[]),
                 ].map(({label,val,sub,c})=>(
                   <Card key={label} style={{padding:'14px 18px',marginBottom:8,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
                     <div>
@@ -1130,7 +1215,7 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
                       <div style={{fontFamily:C.ff,fontSize:20,fontWeight:700,color:C.ink,letterSpacing:'-0.02em'}}>Equipe</div>
                       <div style={{fontFamily:C.fb,fontSize:12,color:C.inkMid,marginTop:2}}>{employees.length} funcionário{employees.length!==1?'s':''}</div>
                     </div>
-                    <Btn sm onClick={()=>{setForm({name:'',role:'',username:'',password:'',payType:'day',payValue:'',hoursPerDay:'8',overtimeRate:'50',cpf:'',admission:'',fgts:false});setFErr({});setEditEmp(null);setAv('new')}}>+ Novo</Btn>
+                    <Btn sm onClick={()=>{setForm({name:'',role:'',username:'',password:'',payType:'month',payValue:'',hoursPerDay:'8',overtimeRate:'50',cpf:'',admission:'',regime:'clt',fgts:true,inss:true,irrf:true});setFErr({});setEditEmp(null);setAv('new')}}>+ Novo</Btn>
                   </div>
 
                   {employees.length===0&&(
@@ -1188,13 +1273,13 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
                   <div style={{marginBottom:16}}>
                     <div style={{fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:'0.06em',textTransform:'uppercase',marginBottom:8}}>Tipo de pagamento</div>
                     <div style={{display:'flex',background:C.bg,borderRadius:10,padding:3,gap:3}}>
-                      {[['day','📅 Por dia'],['hour','⏱ Por hora']].map(([k,l])=>(
+                      {[['month','📆 Mensal'],['day','📅 Por dia'],['hour','⏱ Por hora']].map(([k,l])=>(
                         <button key={k} onClick={()=>setForm((f:any)=>({...f,payType:k}))} style={{flex:1,padding:'10px 0',borderRadius:8,border:'none',cursor:'pointer',fontFamily:C.fb,fontSize:13,fontWeight:600,background:form.payType===k?C.surface:C.bg,color:form.payType===k?C.brand:C.inkLight,boxShadow:form.payType===k?'0 1px 4px rgba(15,23,42,.08)':'none',transition:'all .2s'}}>{l}</button>
                       ))}
                     </div>
                   </div>
 
-                  <Input label={form.payType==='day'?'Valor por dia (R$)':'Valor por hora (R$)'} type="number" value={form.payValue} onChange={v=>setForm((f:any)=>({...f,payValue:v}))} placeholder={form.payType==='day'?'120.00':'15.00'} error={fErr.payValue}/>
+                  <Input label={form.payType==='month'?'Salário mensal (R$)':form.payType==='day'?'Valor por dia (R$)':'Valor por hora (R$)'} type="number" value={form.payValue} onChange={v=>setForm((f:any)=>({...f,payValue:v}))} placeholder={form.payType==='month'?'2500.00':form.payType==='day'?'120.00':'15.00'} error={fErr.payValue}/>
                   <Input label="Horas por dia" type="number" value={form.hoursPerDay} onChange={v=>setForm((f:any)=>({...f,hoursPerDay:v}))} placeholder="8"/>
 
                   <div style={{marginBottom:16}}>
@@ -1210,10 +1295,28 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
                     <div style={{fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.inkLight,letterSpacing:'0.08em',textTransform:'uppercase',marginBottom:12}}>Dados para holerite</div>
                     <Input label="CPF" value={form.cpf||''} onChange={v=>setForm((f:any)=>({...f,cpf:v}))} placeholder="000.000.000-00"/>
                     <Input label="Data de admissão" type="date" value={form.admission||''} onChange={v=>setForm((f:any)=>({...f,admission:v}))}/>
-                    <div style={{display:'flex',alignItems:'center',gap:12,padding:'12px 14px',background:C.bg,borderRadius:10,marginBottom:14}}>
-                      <input type="checkbox" id="fgts" checked={form.fgts||false} onChange={e=>setForm((f:any)=>({...f,fgts:e.target.checked}))} style={{width:18,height:18,accentColor:C.brand,cursor:'pointer'}}/>
-                      <label htmlFor="fgts" style={{fontFamily:C.fb,fontSize:13,color:C.inkMid,cursor:'pointer'}}>Funcionário com FGTS (CLT)</label>
+                    {/* Regime de contratação */}
+                    <div style={{marginBottom:14}}>
+                      <div style={{fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:'0.06em',textTransform:'uppercase',marginBottom:8}}>Regime de contratação</div>
+                      <div style={{display:'flex',background:C.bg,borderRadius:10,padding:3,gap:3}}>
+                        {[['clt','🏢 CLT'],['pj','💼 PJ'],['avulso','👷 Avulso']].map(([k,l])=>(
+                          <button key={k} onClick={()=>setForm((f:any)=>({...f,regime:k,...(k==='clt'?{inss:true,irrf:true,fgts:true}:{inss:false,irrf:false,fgts:false})}))} style={{flex:1,padding:'9px 0',borderRadius:8,border:'none',cursor:'pointer',fontFamily:C.fb,fontSize:12,fontWeight:600,background:(form.regime||'clt')===k?C.surface:C.bg,color:(form.regime||'clt')===k?C.brand:C.inkLight,boxShadow:(form.regime||'clt')===k?'0 1px 4px rgba(15,23,42,.08)':'none',transition:'all .2s'}}>{l}</button>
+                        ))}
+                      </div>
                     </div>
+
+                    {/* Checkboxes legais */}
+                    {[
+                      {id:'fgts',label:'FGTS (8% — encargo empresa)',field:'fgts'},
+                      {id:'inss',label:'INSS (desconto progressivo empregado)',field:'inss'},
+                      {id:'irrf',label:'IRRF (desconto imposto de renda)',field:'irrf'},
+                    ].map(({id,label,field})=>(
+                      <div key={id} style={{display:'flex',alignItems:'center',gap:12,padding:'11px 14px',background:C.bg,borderRadius:10,marginBottom:8,border:`1px solid ${C.border}`}}>
+                        <input type="checkbox" id={id} checked={(form as any)[field]||false} onChange={e=>setForm((f:any)=>({...f,[field]:e.target.checked}))} style={{width:18,height:18,accentColor:C.brand,cursor:'pointer'}}/>
+                        <label htmlFor={id} style={{fontFamily:C.fb,fontSize:13,color:C.inkMid,cursor:'pointer'}}>{label}</label>
+                      </div>
+                    ))}
+                    <div style={{height:6}}/>
                   </div>
                   <Btn full onClick={saveEmp}>{av==='new'?'Cadastrar funcionário':'Salvar alterações'}</Btn>
                 </Card>
@@ -1260,7 +1363,7 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
                           <div style={{width:38,height:38,borderRadius:12,background:C.brandLt,border:`1.5px solid ${C.brand}20`,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:C.ff,fontSize:13,fontWeight:800,color:C.brand,flexShrink:0}}>{emp.avatar}</div>
                           <div>
                             <div style={{fontFamily:C.ff,fontSize:14,fontWeight:700,color:C.ink}}>{emp.name}</div>
-                            <div style={{fontFamily:C.fb,fontSize:11,color:C.inkLight}}>{emp.payType==='hour'?fmt(emp.payValue)+'/h':fmt(emp.payValue)+'/dia'}</div>
+                            <div style={{fontFamily:C.fb,fontSize:11,color:C.inkLight}}>{emp.payType==='month'?fmt(emp.payValue)+'/mês':emp.payType==='hour'?fmt(emp.payValue)+'/h':fmt(emp.payValue)+'/dia'}{emp.regime&&emp.regime!=='clt'?' · '+emp.regime.toUpperCase():''}</div>
                           </div>
                         </div>
                         <div style={{textAlign:'right'}}>
@@ -1275,17 +1378,32 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
                         <div style={{marginTop:16,paddingTop:16,borderTop:`1px solid ${C.border}`}}>
                           {/* Key stats */}
                           <div style={{display:'flex',flexDirection:'column',gap:6,marginBottom:16}}>
+                            {/* Proventos */}
+                            <div style={{fontFamily:C.fb,fontSize:10,fontWeight:700,color:C.emerald,textTransform:'uppercase',letterSpacing:'0.08em',padding:'4px 0 2px'}}>Proventos</div>
                             {[
-                              {label:'⏱ Horas trabalhadas',val:fmtH(pay.totalMs)+' ('+fmtDur(pay.totalMs)+')',c:C.emerald},
+                              {label:'⏱ Horas trabalhadas',val:fmtH(pay.totalMs),c:C.emerald},
                               {label:'📅 Dias trabalhados',val:pay.daysWorked+' dia(s)',c:C.sky},
-                              {label:'💵 Salário bruto',val:fmt(pay.grossValue),c:C.brand},
-                              ...(pay.overtimeMs>0?[{label:'⚡ Hora extra',val:fmtH(pay.overtimeMs),c:C.amber}]:[]),
-                              ...(pay.nightMs>0?[{label:'🌙 Adic. noturno',val:fmt(pay.nightBonus),c:'#7C3AED'}]:[]),
-                              ...(pay.dsrDeduction>0?[{label:'📉 DSR (faltas injust.)',val:'- '+fmt(pay.dsrDeduction),c:C.rose}]:[]),
-                              ...(pay.absDeduction>0?[{label:'📉 Desc. faltas ('+pay.deductedDays+' dia(s))',val:'- '+fmt(pay.absDeduction),c:C.rose}]:[]),
-                              ...(pay.bankBalance>0?[{label:'🏦 Banco de horas',val:fmtHM(pay.bankBalance),c:'#6366F1'}]:[]),
+                              {label:'💵 Salário '+(emp.payType==='month'?'mensal':emp.payType==='day'?'por dia':'por hora'),val:fmt(pay.regularValue),c:C.brand},
+                              ...(pay.overtimeMs>0?[{label:'⚡ Hora extra ('+fmtH(pay.overtimeMs)+')',val:fmt(pay.overtimeValue),c:C.amber}]:[]),
+                              ...(pay.nightMs>0?[{label:'🌙 Adicional noturno 20%',val:fmt(pay.nightBonus),c:'#7C3AED'}]:[]),
+                              {label:'💰 Total bruto',val:fmt(pay.grossValue),c:C.brand},
                             ].map(({label,val,c})=>(
-                              <div key={label} style={{display:'flex',justifyContent:'space-between',padding:'9px 12px',background:C.bg,borderRadius:9}}>
+                              <div key={label} style={{display:'flex',justifyContent:'space-between',padding:'8px 12px',background:C.bg,borderRadius:9}}>
+                                <span style={{fontFamily:C.fb,fontSize:12,color:C.inkMid}}>{label}</span>
+                                <span style={{fontFamily:C.ff,fontSize:13,fontWeight:700,color:c}}>{val}</span>
+                              </div>
+                            ))}
+                            {/* Descontos legais */}
+                            <div style={{fontFamily:C.fb,fontSize:10,fontWeight:700,color:C.rose,textTransform:'uppercase',letterSpacing:'0.08em',padding:'8px 0 2px'}}>Descontos legais</div>
+                            {[
+                              ...(pay.inssV>0?[{label:'🏛 INSS (empregado)',val:'- '+fmt(pay.inssV),c:C.rose}]:[]),
+                              ...(pay.irrfV>0?[{label:'📊 IRRF',val:'- '+fmt(pay.irrfV),c:C.rose}]:[]),
+                              ...(pay.fgtsV>0?[{label:'🏦 FGTS 8% (encargo empresa)',val:fmt(pay.fgtsV),c:'#0891B2'}]:[]),
+                              ...(pay.dsrDeduction>0?[{label:'📉 Desconto DSR',val:'- '+fmt(pay.dsrDeduction),c:C.rose}]:[]),
+                              ...(pay.absDeduction>0?[{label:'📉 Desconto faltas ('+pay.deductedDays+' dia(s))',val:'- '+fmt(pay.absDeduction),c:C.rose}]:[]),
+                              ...(pay.bankBalance>0?[{label:'🏦 Banco de horas acumulado',val:fmtHM(pay.bankBalance),c:'#6366F1'}]:[]),
+                            ].map(({label,val,c})=>(
+                              <div key={label} style={{display:'flex',justifyContent:'space-between',padding:'8px 12px',background:C.bg,borderRadius:9}}>
                                 <span style={{fontFamily:C.fb,fontSize:12,color:C.inkMid}}>{label}</span>
                                 <span style={{fontFamily:C.ff,fontSize:13,fontWeight:700,color:c}}>{val}</span>
                               </div>
