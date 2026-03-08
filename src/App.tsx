@@ -530,8 +530,6 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
     const dw=workedDays.length+(!mf&&st.status!==STATUS.OUT?1:0)
 
     // Dias pagos por ausência (folga paga, atestado, feriado, compensatória)
-    const paidAbsenceDays=Object.entries(fo).filter(([,v])=>ABSENCE_CONFIG[v]?.paga&&(fd[Object.keys(fo).find(k=>fo[k]===v)||'']||0)===0).length
-    // Mais simples: contar dias sem trabalho mas com ausência paga
     const paidAbsDays=Object.entries(fo).filter(([date,absType])=>ABSENCE_CONFIG[absType]?.paga&&!(fd[date]&&(fd[date] as number)>0)).length
 
     // ── DSR (Descanso Semanal Remunerado) ──
@@ -617,12 +615,6 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
   const useBankHours=async(eid:number,hoursMs:number)=>{
     const st=gs(eid)
     const newBalance=Math.max(0,(st.bankBalance||0)-hoursMs)
-    await setDoc(doc(db,rc,String(eid)),{...st,bankBalance:newBalance,log:st.log.map(e=>({type:e.type,time:e.time.toISOString()})),workStart:st.workStart?st.workStart.toISOString():null,breakStart:st.breakStart?st.breakStart.toISOString():null})
-  }
-
-  const creditBankHours=async(eid:number,hoursMs:number)=>{
-    const st=gs(eid)
-    const newBalance=(st.bankBalance||0)+hoursMs
     await setDoc(doc(db,rc,String(eid)),{...st,bankBalance:newBalance,log:st.log.map(e=>({type:e.type,time:e.time.toISOString()})),workStart:st.workStart?st.workStart.toISOString():null,breakStart:st.breakStart?st.breakStart.toISOString():null})
   }
 
