@@ -60,12 +60,17 @@ interface Discount {
   date: string
 }
 
+interface Company {
+  name: string; cnpj: string; address: string; phone: string; email: string; logo: string
+}
+
 interface Employee {
   id: number; name: string; role: string; username: string; password: string; avatar: string
   payType: 'day' | 'hour'; payValue: number; hoursPerDay: number
   overtimeRate: 50 | 70 | 100
   discounts: Discount[]
   gratifications: Discount[]
+  cpf?: string; admission?: string; fgts?: boolean
 }
 
 interface LogEntry { type: string; time: Date }
@@ -155,7 +160,7 @@ export default function PontoApp() {
   // Admin employee form
   const [adminView, setAdminView] = useState('list')
   const [editingEmp, setEditingEmp] = useState<Employee | null>(null)
-  const [form, setForm] = useState({ name: '', role: '', username: '', password: '', payType: 'day', payValue: '', hoursPerDay: '8', overtimeRate: '50' })
+  const [form, setForm] = useState({ name: '', role: '', username: '', password: '', payType: 'day', payValue: '', hoursPerDay: '8', overtimeRate: '50', cpf: '', admission: '', fgts: false })
   const [formErrors, setFormErrors] = useState<Record<string, string>>({})
   const [successMsg, setSuccessMsg] = useState('')
 
@@ -167,8 +172,6 @@ export default function PontoApp() {
   const [gratifError, setGratifError] = useState('')
   const [discountError, setDiscountError] = useState('')
   const [expandedReport, setExpandedReport] = useState<number | null>(null)
-  const [extractContent, setExtractContent] = useState<string | null>(null)
-  const [extractCopied, setExtractCopied] = useState(false)
 
   // Monthly map
   const [mapTarget, setMapTarget] = useState<number | null>(null)
@@ -179,6 +182,11 @@ export default function PontoApp() {
   const [editingDay, setEditingDay] = useState<{ empId: number; date: string } | null>(null)
   const [editTimes, setEditTimes] = useState({ entrada: '', almoco_ini: '', almoco_fim: '', saida: '' })
   const [editOvertimeRate, setEditOvertimeRate] = useState<number | null>(null)
+
+  // Company
+  const [company, setCompany] = useState<Company | null>(null)
+  const [companyForm, setCompanyForm] = useState({ name: '', cnpj: '', address: '', phone: '', email: '', logo: '' })
+  const [companySaved, setCompanySaved] = useState(false)
 
   // Geofence
   const [geofence, setGeofence] = useState<{ lat: number; lng: number; radius: number; address: string } | null>(null)
@@ -220,6 +228,17 @@ export default function PontoApp() {
       setRecords(recs)
     })
     return () => unsub()
+  }, [])
+
+  useEffect(() => {
+    const unsub2 = onSnapshot(doc(db, 'config', 'company'), (snap) => {
+      if (snap.exists()) {
+        const d = snap.data() as Company
+        setCompany(d)
+        setCompanyForm({ name: d.name || '', cnpj: d.cnpj || '', address: d.address || '', phone: d.phone || '', email: d.email || '', logo: d.logo || '' })
+      }
+    })
+    return () => unsub2()
   }, [])
 
   useEffect(() => {
@@ -437,7 +456,7 @@ export default function PontoApp() {
   const saveEmployee = async () => {
     const e = validateForm(); if (Object.keys(e).length) { setFormErrors(e); return }
     const av = form.name.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase()
-    const data = { name: form.name, role: form.role, username: form.username, avatar: av, payType: form.payType as 'day' | 'hour', payValue: Number(form.payValue), hoursPerDay: Number(form.hoursPerDay) || 8, overtimeRate: Number(form.overtimeRate) as 50 | 70 | 100, ...(form.password ? { password: form.password } : {}) }
+    const data = { name: form.name, role: form.role, username: form.username, avatar: av, payType: form.payType as 'day' | 'hour', payValue: Number(form.payValue), hoursPerDay: Number(form.hoursPerDay) || 8, overtimeRate: Number(form.overtimeRate) as 50 | 70 | 100, cpf: (form as any).cpf || '', admission: (form as any).admission || '', fgts: (form as any).fgts || false, ...(form.password ? { password: form.password } : {}) }
     if (editingEmp) {
       const updated = { ...editingEmp, ...data }
       await setDoc(doc(db, 'employees', String(editingEmp.id)), updated)
@@ -449,7 +468,7 @@ export default function PontoApp() {
       setSuccessMsg('Funcionário cadastrado!')
     }
     setTimeout(() => setSuccessMsg(''), 3000)
-    setForm({ name: '', role: '', username: '', password: '', payType: 'day', payValue: '', hoursPerDay: '8', overtimeRate: '50' })
+    setForm({ name: '', role: '', username: '', password: '', payType: 'day', payValue: '', hoursPerDay: '8', overtimeRate: '50', cpf: '', admission: '', fgts: false })
     setFormErrors({}); setEditingEmp(null); setAdminView('list')
   }
 
@@ -460,7 +479,7 @@ export default function PontoApp() {
 
   const startEdit = (emp: Employee) => {
     setEditingEmp(emp)
-    setForm({ name: emp.name, role: emp.role, username: emp.username, password: '', payType: emp.payType, payValue: String(emp.payValue), hoursPerDay: String(emp.hoursPerDay), overtimeRate: String(emp.overtimeRate || 50) })
+    setForm({ name: emp.name, role: emp.role, username: emp.username, password: '', payType: emp.payType, payValue: String(emp.payValue), hoursPerDay: String(emp.hoursPerDay), overtimeRate: String(emp.overtimeRate || 50), cpf: emp.cpf || '', admission: emp.admission || '', fgts: emp.fgts || false })
     setFormErrors({}); setAdminView('edit')
   }
 
@@ -610,65 +629,169 @@ export default function PontoApp() {
   }
 
   // ── Generate Extract ──────────────────────────────────────────────────────
-  const generateExtract = (emp: Employee, state: EmpState, payment: ReturnType<typeof calcPayment>) => {
-    const geradoEm = new Date().toLocaleString('pt-BR')
-    const lines: string[] = []
-    lines.push('EXTRATO DE HORAS TRABALHADAS')
-    lines.push('PontoApp - Sistema de Controle de Ponto')
-    lines.push('━'.repeat(48))
-    lines.push('')
-    lines.push(`Funcionario : ${emp.name}`)
-    lines.push(`Cargo       : ${emp.role}`)
-    lines.push(`Gerado em   : ${geradoEm}`)
-    lines.push('')
-    lines.push('━'.repeat(48))
-    lines.push('RESUMO')
-    lines.push('━'.repeat(48))
-    lines.push(`Horas Trabalhadas : ${formatHours(payment.totalMs)} (${formatDuration(payment.totalMs)})`)
-    lines.push(`Total em Pausas   : ${formatHours(payment.breakMs)} (${formatDuration(payment.breakMs)})`)
-    lines.push(`Dias Trabalhados  : ${payment.daysWorked} dia(s)`)
-    lines.push(`Valor por ${emp.payType === 'hour' ? 'Hora' : 'Dia '}  : ${fmt(emp.payValue)}`)
-    lines.push(`Valor Bruto       : ${fmt(payment.grossValue)}`)
-    lines.push('')
-    // Daily breakdown
-    if (state.dailyWork && Object.keys(state.dailyWork).length > 0) {
-      lines.push('━'.repeat(48))
-      lines.push('HORAS POR DIA')
-      lines.push('━'.repeat(48))
-      Object.entries(state.dailyWork).sort(([a], [b]) => a.localeCompare(b)).forEach(([date, ms]) => {
-        const [y, mo, d] = date.split('-')
-        lines.push(`${d}/${mo}/${y}  :  ${msToHHMM(ms)} (${formatDuration(ms)})`)
+  const generateExtract = async (emp: Employee, state: EmpState, payment: ReturnType<typeof calcPayment>) => {
+    // Dynamically load jsPDF from CDN
+    if (!(window as any).jspdf) {
+      await new Promise<void>((resolve, reject) => {
+        const s = document.createElement('script')
+        s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'
+        s.onload = () => resolve()
+        s.onerror = () => reject()
+        document.head.appendChild(s)
       })
-      lines.push('')
     }
-    lines.push('━'.repeat(48))
-    lines.push('DESCONTOS')
-    lines.push('━'.repeat(48))
-    if (payment.autoDeductions > 0) lines.push(`Pausas Excessivas (auto) : - ${fmt(payment.autoDeductions)}`)
-    if (emp.discounts.length === 0 && payment.autoDeductions === 0) {
-      lines.push('Nenhum desconto aplicado.')
-    } else {
-      emp.discounts.forEach(d => lines.push(`${d.reason} (${d.date}) : - ${fmt(d.value)}`))
-    }
-    lines.push(`Total Descontos   : - ${fmt(payment.totalDeductions)}`)
-    lines.push('')
-    if ((emp.gratifications || []).length > 0) {
-      lines.push('━'.repeat(48))
-      lines.push('GRATIFICACOES')
-      lines.push('━'.repeat(48))
-      emp.gratifications.forEach(g => lines.push(`${g.reason} (${g.date}) : + ${fmt(g.value)}`))
-      lines.push(`Total Gratificacoes : + ${fmt(payment.gratificationsTotal)}`)
-      lines.push('')
-    }
-    lines.push('━'.repeat(48))
-    lines.push(`TOTAL LIQUIDO A RECEBER: ${fmt(payment.net)}`)
-    lines.push('━'.repeat(48))
-    lines.push('')
+    const { jsPDF } = (window as any).jspdf
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+    const W = 210, margin = 16
+    let y = 0
 
-    lines.push('━'.repeat(48))
-    lines.push('Documento gerado automaticamente pelo PontoApp.')
-    setExtractContent(lines.join('\n'))
-    setExtractCopied(false)
+    const col1 = margin, col2 = W / 2 + 2
+    const rowH = 7
+
+    const rect = (x: number, yy: number, w: number, h: number, fill?: string, stroke?: string) => {
+      if (fill) { doc.setFillColor(fill); doc.rect(x, yy, w, h, 'F') }
+      if (stroke) { doc.setDrawColor(stroke); doc.rect(x, yy, w, h, 'S') }
+    }
+    const text = (t: string, x: number, yy: number, opts?: { size?: number; bold?: boolean; color?: string; align?: 'left'|'right'|'center' }) => {
+      doc.setFontSize(opts?.size || 9)
+      doc.setFont('helvetica', opts?.bold ? 'bold' : 'normal')
+      if (opts?.color) { const [r,g,b] = opts.color.match(/\w\w/g)!.map(h=>parseInt(h,16)); doc.setTextColor(r,g,b) } else doc.setTextColor(30,30,30)
+      doc.text(t, x, yy, { align: opts?.align || 'left' })
+    }
+    const line = (x1: number, yy: number, x2: number, color = '#e2e8f0') => {
+      const [r,g,b] = color.match(/\w\w/g)!.map(h=>parseInt(h,16))
+      doc.setDrawColor(r,g,b); doc.setLineWidth(0.3); doc.line(x1, yy, x2, yy)
+    }
+
+    // ── HEADER ────────────────────────────────────────────────────────────────
+    rect(0, 0, W, 36, '#1e293b')
+    y = 10
+
+    if (company?.logo) {
+      try { doc.addImage(company.logo, 'AUTO', margin, 4, 28, 28, '', 'FAST') } catch(_) {}
+      const tx = margin + 32
+      text(company?.name || 'PontoApp', tx, y + 2, { size: 14, bold: true, color: '#f1f5f9' })
+      if (company?.cnpj) text(`CNPJ: ${company.cnpj}`, tx, y + 8, { size: 8, color: '#94a3b8' })
+      if (company?.address) text(company.address, tx, y + 14, { size: 7, color: '#94a3b8' })
+      if (company?.phone || company?.email) text([company.phone, company.email].filter(Boolean).join('  |  '), tx, y + 20, { size: 7, color: '#94a3b8' })
+    } else {
+      text(company?.name || 'PontoApp', margin, y + 4, { size: 16, bold: true, color: '#f1f5f9' })
+      if (company?.cnpj) text(`CNPJ: ${company.cnpj}`, margin, y + 11, { size: 8, color: '#94a3b8' })
+      if (company?.address) text(company.address, margin, y + 17, { size: 7, color: '#94a3b8' })
+      if (company?.phone || company?.email) text([company.phone, company.email].filter(Boolean).join('  |  '), margin, y + 23, { size: 7, color: '#94a3b8' })
+    }
+
+    text('HOLERITE', W - margin, y + 2, { size: 13, bold: true, color: '#6366f1', align: 'right' })
+    text(new Date().toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' }), W - margin, y + 9, { size: 8, color: '#94a3b8', align: 'right' })
+    text(`Gerado em: ${new Date().toLocaleString('pt-BR')}`, W - margin, y + 15, { size: 7, color: '#64748b', align: 'right' })
+
+    y = 42
+
+    // ── EMPLOYEE DATA ─────────────────────────────────────────────────────────
+    rect(margin, y, W - margin * 2, 6, '#f8fafc')
+    text('DADOS DO FUNCIONÁRIO', margin + 2, y + 4.5, { size: 8, bold: true, color: '#475569' })
+    y += 8
+
+    const empRows = [
+      ['Nome', emp.name, 'Cargo', emp.role],
+      ['CPF', emp.cpf || '—', 'Admissão', emp.admission ? new Date(emp.admission + 'T12:00:00').toLocaleDateString('pt-BR') : '—'],
+      ['Tipo Pagto.', emp.payType === 'hour' ? 'Por Hora' : 'Por Dia', 'Salário Base', fmt(emp.payValue) + (emp.payType === 'hour' ? '/h' : '/dia')],
+    ]
+    empRows.forEach((row, i) => {
+      if (i % 2 === 0) rect(margin, y, W - margin * 2, rowH, '#f8fafc')
+      text(row[0], col1 + 2, y + 5, { size: 7.5, color: '#64748b' })
+      text(row[1], col1 + 30, y + 5, { size: 8, bold: true })
+      text(row[2], col2 + 2, y + 5, { size: 7.5, color: '#64748b' })
+      text(row[3], col2 + 30, y + 5, { size: 8, bold: true })
+      line(margin, y + rowH, W - margin, y + rowH)
+      y += rowH
+    })
+    y += 6
+
+    // ── EARNINGS ──────────────────────────────────────────────────────────────
+    rect(margin, y, W - margin * 2, 6, '#f0fdf4')
+    text('PROVENTOS', margin + 2, y + 4.5, { size: 8, bold: true, color: '#16a34a' })
+    y += 8
+
+    const earnings: [string, string, string][] = [
+      ['Horas Trabalhadas', `${formatHours(payment.totalMs)} | ${payment.daysWorked} dia(s)`, fmt(payment.grossValue - (payment.overtimeMs > 0 ? Object.entries(payment.overtimeByRate).reduce((a,[r,m]) => a + (m as number)/3600000*(emp.payType==='hour'?emp.payValue:emp.payValue/emp.hoursPerDay)*(1+Number(r)/100), 0) : 0) - payment.nightBonus - payment.gratificationsTotal)],
+    ]
+    Object.entries(payment.overtimeByRate).sort(([a],[b])=>Number(a)-Number(b)).forEach(([rate, ms]) => {
+      const hv = emp.payType === 'hour' ? emp.payValue : emp.payValue / emp.hoursPerDay
+      const val = (ms as number) / 3600000 * hv * (1 + Number(rate) / 100)
+      earnings.push([`Hora Extra +${rate}%`, formatHours(ms as number), fmt(val)])
+    })
+    if (payment.nightMs > 0) earnings.push(['Adicional Noturno (20%)', formatHours(payment.nightMs), fmt(payment.nightBonus)])
+    ;(emp.gratifications || []).forEach(g => earnings.push([`Gratificação: ${g.reason}`, g.date, fmt(g.value)]))
+
+    earnings.forEach((row, i) => {
+      if (i % 2 === 0) rect(margin, y, W - margin * 2, rowH, '#f8fafc')
+      text(row[0], col1 + 2, y + 5, { size: 8 })
+      text(row[1], W / 2, y + 5, { size: 8, color: '#475569', align: 'center' })
+      text(row[2], W - margin - 2, y + 5, { size: 8, bold: true, color: '#16a34a', align: 'right' })
+      line(margin, y + rowH, W - margin, y + rowH)
+      y += rowH
+    })
+
+    rect(margin, y, W - margin * 2, 7, '#dcfce7')
+    text('TOTAL PROVENTOS', col1 + 2, y + 5, { size: 8.5, bold: true, color: '#15803d' })
+    text(fmt(payment.grossValue + payment.gratificationsTotal), W - margin - 2, y + 5, { size: 9, bold: true, color: '#15803d', align: 'right' })
+    y += 10
+
+    // ── DEDUCTIONS ────────────────────────────────────────────────────────────
+    rect(margin, y, W - margin * 2, 6, '#fef2f2')
+    text('DESCONTOS', margin + 2, y + 4.5, { size: 8, bold: true, color: '#dc2626' })
+    y += 8
+
+    const deductions: [string, string, string][] = []
+    if (payment.autoDeductions > 0) deductions.push(['Pausas Excessivas', '—', fmt(payment.autoDeductions)])
+    emp.discounts.forEach(d => deductions.push([d.reason, d.date, fmt(d.value)]))
+
+    // FGTS
+    if (emp.fgts) {
+      const fgtsVal = payment.grossValue * 0.08
+      deductions.push(['FGTS (8%)', '—', fmt(fgtsVal)])
+    }
+
+    if (deductions.length === 0) {
+      text('Nenhum desconto aplicado.', col1 + 2, y + 5, { size: 8, color: '#94a3b8' })
+      y += rowH
+    } else {
+      deductions.forEach((row, i) => {
+        if (i % 2 === 0) rect(margin, y, W - margin * 2, rowH, '#fff5f5')
+        text(row[0], col1 + 2, y + 5, { size: 8 })
+        text(row[1], W / 2, y + 5, { size: 8, color: '#475569', align: 'center' })
+        text(`- ${row[2]}`, W - margin - 2, y + 5, { size: 8, bold: true, color: '#dc2626', align: 'right' })
+        line(margin, y + rowH, W - margin, y + rowH)
+        y += rowH
+      })
+    }
+
+    const fgtsTotal = emp.fgts ? payment.grossValue * 0.08 : 0
+    rect(margin, y, W - margin * 2, 7, '#fee2e2')
+    text('TOTAL DESCONTOS', col1 + 2, y + 5, { size: 8.5, bold: true, color: '#dc2626' })
+    text(`- ${fmt(payment.totalDeductions + fgtsTotal)}`, W - margin - 2, y + 5, { size: 9, bold: true, color: '#dc2626', align: 'right' })
+    y += 12
+
+    // ── NET ───────────────────────────────────────────────────────────────────
+    rect(margin, y, W - margin * 2, 12, '#1e293b')
+    text('VALOR LÍQUIDO A RECEBER', col1 + 4, y + 8, { size: 10, bold: true, color: '#f1f5f9' })
+    text(fmt(payment.net - fgtsTotal), W - margin - 4, y + 8, { size: 13, bold: true, color: '#4ade80', align: 'right' })
+    y += 16
+
+    // ── SIGNATURE ─────────────────────────────────────────────────────────────
+    line(margin, y + 14, margin + 70, y + 14)
+    line(W - margin - 70, y + 14, W - margin, y + 14)
+    text('Assinatura do Empregador', margin + 35, y + 18, { size: 7, color: '#94a3b8', align: 'center' })
+    text('Assinatura do Funcionário', W - margin - 35, y + 18, { size: 7, color: '#94a3b8', align: 'center' })
+    y += 24
+
+    // ── FOOTER ────────────────────────────────────────────────────────────────
+    line(margin, y, W - margin, y)
+    y += 4
+    text('Documento gerado automaticamente pelo PontoApp. Declaro que recebi a importância acima discriminada.', W / 2, y + 4, { size: 6.5, color: '#94a3b8', align: 'center' })
+
+    doc.save(`Holerite_${emp.name.replace(/\s+/g,'_')}_${new Date().toLocaleDateString('pt-BR').replace(/\//g,'-')}.pdf`)
   }
 
   // ── Live values ───────────────────────────────────────────────────────────
@@ -1001,7 +1124,7 @@ export default function PontoApp() {
           {loggedIn?.role === 'admin' && (
             <>
               <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
-                {[['list', '👥 Equipe'], ['reports', '💰 Pagamentos'], ['monthly', '📅 Mapa Mensal'], ['geofence', '📍 Local']].map(([key, label]) => (
+                {[['list', '👥 Equipe'], ['reports', '💰 Pagamentos'], ['monthly', '📅 Mapa Mensal'], ['geofence', '📍 Local'], ['empresa', '🏢 Empresa']].map(([key, label]) => (
                   <button key={key} onClick={() => { setView(key); if (key === 'list') setAdminView('list') }} style={{ flex: 1, minWidth: 70, padding: '8px 4px', borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: 10, fontWeight: 700, fontFamily: 'inherit', background: view === key ? '#6366f1' : '#1e293b', color: view === key ? '#fff' : '#64748b' }}>{label}</button>
                 ))}
               </div>
@@ -1018,7 +1141,7 @@ export default function PontoApp() {
                           <div style={{ fontSize: 10, letterSpacing: 3, color: '#475569', textTransform: 'uppercase' }}>Funcionários</div>
                           <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>{employees.length} cadastrado(s)</div>
                         </div>
-                        <Btn small onClick={() => { setForm({ name: '', role: '', username: '', password: '', payType: 'day', payValue: '', hoursPerDay: '8', overtimeRate: '50' }); setFormErrors({}); setEditingEmp(null); setAdminView('new') }}>+ Novo</Btn>
+                        <Btn small onClick={() => { setForm({ name: '', role: '', username: '', password: '', payType: 'day', payValue: '', hoursPerDay: '8', overtimeRate: '50', cpf: '', admission: '', fgts: false }); setFormErrors({}); setEditingEmp(null); setAdminView('new') }}>+ Novo</Btn>
                       </div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                         {employees.map(emp => {
@@ -1092,6 +1215,16 @@ export default function PontoApp() {
                               +{rate}%
                             </button>
                           ))}
+                        </div>
+                      </div>
+                      <div style={{ marginTop: 4, paddingTop: 14, borderTop: '1px solid #1e293b' }}>
+                        <div style={{ fontSize: 10, letterSpacing: 3, color: '#475569', textTransform: 'uppercase', marginBottom: 10 }}>📋 Dados para Holerite</div>
+                        <Input label="CPF" value={(form as any).cpf || ''} onChange={v => setForm(f => ({ ...f, cpf: v } as any))} placeholder="000.000.000-00" />
+                        <Input label="Data de Admissão" type="date" value={(form as any).admission || ''} onChange={v => setForm(f => ({ ...f, admission: v } as any))} placeholder="" />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', background: '#0f172a', borderRadius: 10, marginBottom: 14 }}>
+                          <input type="checkbox" id="fgts" checked={(form as any).fgts || false} onChange={e => setForm(f => ({ ...f, fgts: e.target.checked } as any))}
+                            style={{ width: 18, height: 18, accentColor: '#6366f1', cursor: 'pointer' }} />
+                          <label htmlFor="fgts" style={{ fontSize: 12, color: '#94a3b8', cursor: 'pointer', fontWeight: 600 }}>Funcionário com FGTS (CLT)</label>
                         </div>
                       </div>
                       <Btn full onClick={saveEmployee} color="#6366f1">{adminView === 'new' ? '✅ Cadastrar' : '💾 Salvar'}</Btn>
@@ -1303,10 +1436,10 @@ export default function PontoApp() {
                             </div>
 
                             <button
-                              onClick={() => { generateExtract(emp, st, pay); setExtractCopied(false) }}
+                              onClick={() => generateExtract(emp, st, pay)}
                               style={{ width: '100%', padding: '12px', borderRadius: 12, border: '1.5px solid #6366f160', cursor: 'pointer', background: 'linear-gradient(135deg,#6366f115,#06b6d415)', color: '#a5b4fc', fontSize: 12, fontWeight: 800, fontFamily: 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
                             >
-                              <span>📄</span> Ver Extrato de Horas
+                              <span>📄</span> Baixar Holerite PDF
                             </button>
                           </div>
                         )}
@@ -1314,268 +1447,6 @@ export default function PontoApp() {
                     )
                   })}
 
-                  {/* Modal Extrato */}
-                  {extractContent && (
-                    <div style={{ position: 'fixed', inset: 0, background: '#000000cc', zIndex: 100, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-                      <div style={{ width: '100%', maxWidth: 420, background: '#0f172a', borderRadius: '20px 20px 0 0', border: '1px solid #334155', maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}>
-                        <div style={{ padding: '16px 20px', borderBottom: '1px solid #1e293b', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
-                          <div style={{ fontSize: 14, fontWeight: 800, color: '#f1f5f9' }}>📄 Extrato de Horas</div>
-                          <button onClick={() => setExtractContent(null)} style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', color: '#94a3b8', fontSize: 12, fontFamily: 'inherit' }}>✕ Fechar</button>
-                        </div>
-                        <div style={{ overflowY: 'auto', padding: '16px 20px', flex: 1 }}>
-                          <pre style={{ margin: 0, fontFamily: "'Courier New', monospace", fontSize: 11, color: '#94a3b8', lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{extractContent}</pre>
-                        </div>
-                        <div style={{ padding: '14px 20px', borderTop: '1px solid #1e293b', flexShrink: 0, display: 'flex', gap: 10 }}>
-                          <button onClick={() => { navigator.clipboard.writeText(extractContent); setExtractCopied(true); setTimeout(() => setExtractCopied(false), 2500) }}
-                            style={{ flex: 1, padding: '13px', borderRadius: 12, border: 'none', cursor: 'pointer', background: extractCopied ? '#16a34a' : 'linear-gradient(135deg,#6366f1,#4f46e5)', color: '#fff', fontSize: 13, fontWeight: 800, fontFamily: 'inherit' }}>
-                            {extractCopied ? '✅ Copiado!' : '📋 Copiar'}
-                          </button>
-                          <button onClick={() => {
-                            const win = window.open('', '_blank')
-                            if (win) {
-                              win.document.write(`<html><head><title>Extrato</title><style>body{font-family:'Courier New',monospace;font-size:13px;line-height:1.8;padding:32px;}pre{white-space:pre-wrap;}</style></head><body><pre>${extractContent}</pre><script>window.onload=()=>{window.print();window.onafterprint=()=>window.close()}<\/script></body></html>`)
-                              win.document.close()
-                            }
-                          }} style={{ flex: 1, padding: '13px', borderRadius: 12, border: '1.5px solid #334155', cursor: 'pointer', background: '#1e293b', color: '#94a3b8', fontSize: 13, fontWeight: 800, fontFamily: 'inherit' }}>
-                            🖨️ Imprimir
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* ══ MAPA MENSAL ══════════════════════════════════════════════ */}
-              {view === 'monthly' && (
-                <div>
-                  <div style={{ fontSize: 10, letterSpacing: 3, color: '#475569', textTransform: 'uppercase', marginBottom: 14 }}>📅 Mapa Mensal de Horas</div>
-
-                  {/* Month selector */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, background: '#1e293b', borderRadius: 12, padding: '10px 14px', border: '1px solid #334155' }}>
-                    <button onClick={() => {
-                      const [y, m] = mapMonth.split('-').map(Number)
-                      const d = new Date(y, m - 2, 1)
-                      setMapMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`)
-                    }} style={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, padding: '6px 12px', cursor: 'pointer', color: '#94a3b8', fontSize: 14, fontFamily: 'inherit' }}>◀</button>
-                    <div style={{ flex: 1, textAlign: 'center' }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: '#f1f5f9' }}>
-                        {new Date(mapMonth + '-01').toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' }).replace(/^\w/, c => c.toUpperCase())}
-                      </div>
-                    </div>
-                    <button onClick={() => {
-                      const [y, m] = mapMonth.split('-').map(Number)
-                      const d = new Date(y, m, 1)
-                      setMapMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`)
-                    }} style={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, padding: '6px 12px', cursor: 'pointer', color: '#94a3b8', fontSize: 14, fontFamily: 'inherit' }}>▶</button>
-                  </div>
-
-                  {/* Employee selector */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
-                    {employees.map(emp => (
-                      <button key={emp.id} onClick={() => setMapTarget(mapTarget === emp.id ? null : emp.id)}
-                        style={{ background: mapTarget === emp.id ? '#6366f120' : '#1e293b', border: `1px solid ${mapTarget === emp.id ? '#6366f160' : '#334155'}`, borderRadius: 12, padding: '12px 14px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontFamily: 'inherit' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                          <div style={{ width: 34, height: 34, borderRadius: '50%', background: '#6366f1', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 800, color: '#fff' }}>{emp.avatar}</div>
-                          <div style={{ textAlign: 'left' }}>
-                            <div style={{ fontSize: 13, fontWeight: 700, color: '#f1f5f9' }}>{emp.name}</div>
-                            <div style={{ fontSize: 10, color: '#64748b' }}>{emp.role}</div>
-                          </div>
-                        </div>
-                        <div style={{ fontSize: 11, color: '#6366f1', fontWeight: 700 }}>{mapTarget === emp.id ? 'fechar ▲' : 'ver mapa ▼'}</div>
-                      </button>
-                    ))}
-                  </div>
-
-                  {/* Monthly calendar for selected employee */}
-                  {mapTarget !== null && (() => {
-                    const emp = employees.find(e => e.id === mapTarget)
-                    if (!emp) return null
-                    const st = getState(emp.id)
-                    const [y, m] = mapMonth.split('-').map(Number)
-                    const days = getDaysInMonth(y, m - 1)
-                    const dailyWork = st.dailyWork || {}
-                    const monthTotal = days.reduce((sum, d) => sum + (dailyWork[d] || 0), 0)
-
-                    return (
-                      <div style={{ background: '#1e293b', borderRadius: 14, padding: 16, border: '1px solid #334155', marginBottom: 16 }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-                          <div style={{ fontSize: 13, fontWeight: 800, color: '#f1f5f9' }}>{emp.name}</div>
-                          <div style={{ fontSize: 12, fontWeight: 700, color: '#22c55e' }}>Total: {msToHHMM(monthTotal)}</div>
-                        </div>
-
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                          {days.map(date => {
-                            const ms = dailyWork[date] || 0
-                            const [, , d] = date.split('-')
-                            const weekday = new Date(date + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'short' })
-                            const isToday = date === todayStr
-                            const isEditing = editingDay?.empId === emp.id && editingDay?.date === date
-                            const isWeekend = new Date(date + 'T12:00:00').getDay() === 0 || new Date(date + 'T12:00:00').getDay() === 6
-                            const offType = (st.dailyOff || {})[date]
-                            const isPaidOff = offType === 'paid'
-                            const isUnpaidOff = offType === 'unpaid'
-
-                            const rowBg = isPaidOff ? '#7c3aed15' : isUnpaidOff ? '#33415515' : isToday ? '#6366f115' : '#0f172a'
-                            const rowBorder = isPaidOff ? '1px solid #7c3aed40' : isUnpaidOff ? '1px solid #47556940' : isToday ? '1px solid #6366f140' : '1px solid transparent'
-
-                            return (
-                              <div key={date}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', background: rowBg, borderRadius: 8, border: rowBorder }}>
-                                  <div style={{ width: 28, textAlign: 'center' }}>
-                                    <div style={{ fontSize: 13, fontWeight: 700, color: isToday ? '#a5b4fc' : isPaidOff ? '#c4b5fd' : isUnpaidOff ? '#64748b' : isWeekend ? '#475569' : '#94a3b8' }}>{d}</div>
-                                    <div style={{ fontSize: 9, color: '#475569', textTransform: 'uppercase' }}>{weekday}</div>
-                                  </div>
-                                  <div style={{ flex: 1 }}>
-                                    {isPaidOff ? (
-                                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                        <span style={{ fontSize: 14 }}>🌴</span>
-                                        <span style={{ fontSize: 11, fontWeight: 700, color: '#c4b5fd' }}>Folga Remunerada</span>
-                                      </div>
-                                    ) : isUnpaidOff ? (
-                                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                        <span style={{ fontSize: 14 }}>⚫</span>
-                                        <span style={{ fontSize: 11, fontWeight: 700, color: '#64748b' }}>Folga Não Remunerada</span>
-                                      </div>
-                                    ) : ms > 0 ? (
-                                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                        <div style={{ flex: 1, height: 6, background: '#1e293b', borderRadius: 3, overflow: 'hidden' }}>
-                                          <div style={{ height: '100%', background: '#22c55e', borderRadius: 3, width: `${Math.min(100, (ms / (emp.hoursPerDay * 3600000)) * 100)}%` }} />
-                                        </div>
-                                        <span style={{ fontSize: 12, fontWeight: 700, color: '#22c55e', minWidth: 42 }}>{msToHHMM(ms)}</span>
-                                      </div>
-                                    ) : (
-                                      <div style={{ fontSize: 11, color: isWeekend ? '#334155' : '#475569' }}>{isWeekend ? '—' : 'Sem registro'}</div>
-                                    )}
-                                  </div>
-                                  <button onClick={() => {
-                                    if (isEditing) { setEditingDay(null); return }
-                                    setEditingDay({ empId: emp.id, date })
-                                    const dayLogs = st.log.filter(e => new Date(e.time).toISOString().split('T')[0] === date)
-                                    const getTime = (type: string) => {
-                                      const entry = dayLogs.find(e => e.type === type)
-                                      if (!entry) return ''
-                                      const t = new Date(entry.time)
-                                      return `${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}`
-                                    }
-                                    setEditTimes({
-                                      entrada: getTime('entrada'),
-                                      almoco_ini: getTime('inicio_pausa'),
-                                      almoco_fim: getTime('fim_pausa'),
-                                      saida: getTime('saida'),
-                                    })
-                                    setEditOvertimeRate((st.dailyOvertimeRate || {})[date] ?? null)
-                                  }} style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 6, padding: '4px 8px', cursor: 'pointer', color: '#64748b', fontSize: 10, fontFamily: 'inherit' }}>
-                                    {isEditing ? '✕' : '✏️'}
-                                  </button>
-                                </div>
-
-                                {/* Edit / Folga panel */}
-                                {isEditing && (
-                                  <div style={{ background: '#0f172a', borderRadius: 8, padding: 12, margin: '4px 0', border: '1px solid #6366f140' }}>
-                                    <div style={{ fontSize: 10, color: '#6366f1', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 10 }}>✏️ Editar dia {d}/{String(m).padStart(2,'0')}</div>
-
-                                    {/* Folga buttons */}
-                                    <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-                                      <button onClick={async () => { await markDayOff(emp.id, date, isPaidOff ? null : 'paid'); setEditingDay(null) }}
-                                        style={{ flex: 1, padding: '8px 0', borderRadius: 8, border: `1px solid ${isPaidOff ? '#7c3aed' : '#7c3aed40'}`, background: isPaidOff ? '#7c3aed30' : 'transparent', color: isPaidOff ? '#c4b5fd' : '#7c3aed', fontSize: 10, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
-                                        🌴 {isPaidOff ? 'Remover Folga' : 'Folga Remunerada'}
-                                      </button>
-                                      <button onClick={async () => { await markDayOff(emp.id, date, isUnpaidOff ? null : 'unpaid'); setEditingDay(null) }}
-                                        style={{ flex: 1, padding: '8px 0', borderRadius: 8, border: `1px solid ${isUnpaidOff ? '#475569' : '#33415540'}`, background: isUnpaidOff ? '#33415530' : 'transparent', color: isUnpaidOff ? '#94a3b8' : '#475569', fontSize: 10, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
-                                        ⚫ {isUnpaidOff ? 'Remover Folga' : 'Folga Não Rem.'}
-                                      </button>
-                                    </div>
-
-                                    {/* Separator */}
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-                                      <div style={{ flex: 1, height: 1, background: '#1e293b' }} />
-                                      <span style={{ fontSize: 9, color: '#334155', letterSpacing: 2 }}>OU EDITAR HORÁRIOS</span>
-                                      <div style={{ flex: 1, height: 1, background: '#1e293b' }} />
-                                    </div>
-
-                                    {/* Per-day overtime rate */}
-                                    <div style={{ marginBottom: 12 }}>
-                                      <div style={{ fontSize: 9, color: '#f59e0b', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 6, fontWeight: 700 }}>⚡ % Hora Extra neste dia</div>
-                                      <div style={{ display: 'flex', background: '#0f172a', borderRadius: 8, padding: 3, gap: 2 }}>
-                                        {([null, 70, 100] as (number | null)[]).map(rate => {
-                                          const empDefaultRate = employees.find(e => e.id === emp.id)?.overtimeRate || 50
-                                          const isSelected = editOvertimeRate === rate
-                                          const label = rate === null ? `Padrão (${empDefaultRate}%)` : `+${rate}%`
-                                          return (
-                                            <button key={String(rate)} onClick={() => setEditOvertimeRate(rate)}
-                                              style={{ flex: 1, padding: '7px 0', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 10, fontWeight: 700, fontFamily: 'inherit', background: isSelected ? '#f59e0b' : 'transparent', color: isSelected ? '#000' : '#64748b', transition: 'all 0.15s' }}>
-                                              {label}
-                                            </button>
-                                          )
-                                        })}
-                                      </div>
-                                    </div>
-
-                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
-                                      {[
-                                        { key: 'entrada', label: '▶ Entrada', color: '#22c55e' },
-                                        { key: 'almoco_ini', label: '🍽️ Início Almoço', color: '#f59e0b' },
-                                        { key: 'almoco_fim', label: '🔙 Volta Almoço', color: '#3b82f6' },
-                                        { key: 'saida', label: '■ Saída', color: '#ef4444' },
-                                      ].map(({ key, label, color }) => (
-                                        <div key={key}>
-                                          <div style={{ fontSize: 9, color, marginBottom: 4, fontWeight: 700 }}>{label}</div>
-                                          <input
-                                            type="time"
-                                            value={editTimes[key as keyof typeof editTimes]}
-                                            onChange={e => setEditTimes(t => ({ ...t, [key]: e.target.value }))}
-                                            style={{ width: '100%', boxSizing: 'border-box', background: '#1e293b', border: `1px solid ${color}40`, borderRadius: 8, padding: '8px 10px', color: '#f1f5f9', fontSize: 13, fontFamily: 'inherit', outline: 'none' }}
-                                          />
-                                        </div>
-                                      ))}
-                                    </div>
-                                    {editTimes.entrada && editTimes.saida && (() => {
-                                      const tsE = timeToMs(editTimes.entrada, date)
-                                      const tsS = timeToMs(editTimes.saida, date)
-                                      const tsAI = timeToMs(editTimes.almoco_ini, date)
-                                      const tsAF = timeToMs(editTimes.almoco_fim, date)
-                                      if (!tsE || !tsS || tsS <= tsE) return null
-                                      let brk = 0
-                                      if (tsAI && tsAF && tsAF > tsAI) brk = tsAF - tsAI
-                                      const worked = Math.max(0, tsS - tsE - brk)
-                                      return (
-                                        <div style={{ background: '#22c55e15', border: '1px solid #22c55e30', borderRadius: 8, padding: '8px 12px', marginBottom: 10, display: 'flex', justifyContent: 'space-between' }}>
-                                          <span style={{ fontSize: 11, color: '#64748b' }}>Total calculado</span>
-                                          <span style={{ fontSize: 12, fontWeight: 800, color: '#22c55e' }}>{msToHHMM(worked)}</span>
-                                        </div>
-                                      )
-                                    })()}
-                                    <div style={{ display: 'flex', gap: 8 }}>
-                                      <Btn full onClick={saveEditedHours} color="#22c55e">💾 Salvar Horários</Btn>
-                                      <Btn full outline color="#64748b" onClick={() => setEditingDay(null)}>Fechar</Btn>
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                            )
-                          })}
-                        </div>
-
-                        <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid #334155' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                            <span style={{ fontSize: 12, color: '#64748b' }}>Total trabalhado</span>
-                            <span style={{ fontSize: 14, fontWeight: 800, color: '#22c55e' }}>{msToHHMM(monthTotal)}</span>
-                          </div>
-                          {(() => {
-                            const paidOff = days.filter(d => (st.dailyOff || {})[d] === 'paid').length
-                            const unpaidOff = days.filter(d => (st.dailyOff || {})[d] === 'unpaid').length
-                            return (<>
-                              {paidOff > 0 && <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}><span style={{ fontSize: 11, color: '#c4b5fd' }}>🌴 Folgas remuneradas</span><span style={{ fontSize: 11, fontWeight: 700, color: '#c4b5fd' }}>{paidOff} dia(s)</span></div>}
-                              {unpaidOff > 0 && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ fontSize: 11, color: '#64748b' }}>⚫ Folgas não remuneradas</span><span style={{ fontSize: 11, fontWeight: 700, color: '#64748b' }}>{unpaidOff} dia(s)</span></div>}
-                            </>)
-                          })()}
-                        </div>
-                      </div>
-                    )
-                  })()}
-                </div>
-              )}
 
               {/* GEOFENCE ADMIN */}
               {view === 'geofence' && (
@@ -1627,6 +1498,54 @@ export default function PontoApp() {
                       {geoLoading ? '🔍 Buscando endereço...' : '📍 Salvar Localização'}
                     </button>
                   </div>
+                </div>
+              )}
+
+              {/* EMPRESA */}
+              {view === 'empresa' && (
+                <div>
+                  <div style={{ fontSize: 10, letterSpacing: 3, color: '#475569', textTransform: 'uppercase', marginBottom: 14 }}>🏢 Dados da Empresa</div>
+
+                  {/* Logo upload */}
+                  <div style={{ background: '#1e293b', borderRadius: 14, padding: 16, marginBottom: 14, border: '1px solid #334155', textAlign: 'center' }}>
+                    <div style={{ fontSize: 10, letterSpacing: 2, color: '#475569', textTransform: 'uppercase', marginBottom: 12 }}>Logo da Empresa</div>
+                    {companyForm.logo ? (
+                      <div style={{ marginBottom: 10 }}>
+                        <img src={companyForm.logo} alt="Logo" style={{ maxHeight: 80, maxWidth: '100%', borderRadius: 8, objectFit: 'contain' }} />
+                      </div>
+                    ) : (
+                      <div style={{ width: 80, height: 80, borderRadius: 12, background: '#0f172a', border: '2px dashed #334155', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 12px', fontSize: 28 }}>🏢</div>
+                    )}
+                    <label style={{ background: '#6366f120', border: '1px solid #6366f140', borderRadius: 8, padding: '8px 16px', cursor: 'pointer', fontSize: 11, fontWeight: 700, color: '#a5b4fc', display: 'inline-block' }}>
+                      📷 {companyForm.logo ? 'Trocar Logo' : 'Enviar Logo'}
+                      <input type="file" accept="image/*" style={{ display: 'none' }} onChange={e => {
+                        const file = e.target.files?.[0]
+                        if (!file) return
+                        const reader = new FileReader()
+                        reader.onload = ev => setCompanyForm(f => ({ ...f, logo: ev.target?.result as string }))
+                        reader.readAsDataURL(file)
+                      }} />
+                    </label>
+                    {companyForm.logo && (
+                      <button onClick={() => setCompanyForm(f => ({ ...f, logo: '' }))}
+                        style={{ marginLeft: 8, background: '#ef444420', border: '1px solid #ef444440', borderRadius: 8, padding: '8px 12px', cursor: 'pointer', fontSize: 11, color: '#ef4444', fontFamily: 'inherit' }}>
+                        🗑 Remover
+                      </button>
+                    )}
+                  </div>
+
+                  <Input label="Nome da Empresa" value={companyForm.name} onChange={v => setCompanyForm(f => ({ ...f, name: v }))} placeholder="Ex: Empresa LTDA" />
+                  <Input label="CNPJ" value={companyForm.cnpj} onChange={v => setCompanyForm(f => ({ ...f, cnpj: v }))} placeholder="00.000.000/0000-00" />
+                  <Input label="Endereço Completo" value={companyForm.address} onChange={v => setCompanyForm(f => ({ ...f, address: v }))} placeholder="Rua, Nº, Bairro, Cidade - UF" />
+                  <Input label="Telefone" value={companyForm.phone} onChange={v => setCompanyForm(f => ({ ...f, phone: v }))} placeholder="(00) 00000-0000" />
+                  <Input label="E-mail" value={companyForm.email} onChange={v => setCompanyForm(f => ({ ...f, email: v }))} placeholder="contato@empresa.com.br" />
+
+                  {companySaved && <div style={{ background: '#22c55e15', border: '1px solid #22c55e40', borderRadius: 10, padding: '10px 14px', marginBottom: 12, fontSize: 12, color: '#22c55e', fontWeight: 600 }}>✅ Dados salvos com sucesso!</div>}
+                  <Btn full color="#6366f1" onClick={async () => {
+                    await setDoc(doc(db, 'config', 'company'), companyForm)
+                    setCompanySaved(true)
+                    setTimeout(() => setCompanySaved(false), 3000)
+                  }}>💾 Salvar Dados da Empresa</Btn>
                 </div>
               )}
             </>
