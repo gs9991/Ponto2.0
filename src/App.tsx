@@ -715,9 +715,8 @@ function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
       const mat=String(i+1).padStart(3,'0')
       rows.push([mat,emp.name,emp.role,emp.regime||'clt',emp.payType==='month'?'Mensal':emp.payType==='day'?'Diário':'Horário',String(emp.payValue),String(h),String(m),`${h}h${String(m).padStart(2,'0')}`])
     })
-    const csv=rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')).join('
-')
-    const bom='﻿' // BOM para Excel reconhecer UTF-8
+    const csv=rows.map(r=>r.map(c=>'"'+String(c).replace(/"/g,'""')+'"').join(',')).join('\n')
+    const bom='\uFEFF' // BOM para Excel reconhecer UTF-8
     const blob=new Blob([bom+csv],{type:'text/csv;charset=utf-8;'})
     const url=URL.createObjectURL(blob)
     const a=document.createElement('a');a.href=url
