@@ -304,7 +304,6 @@ function SuperAdminScreen({ onLogout }: { onLogout: () => void }) {
 // ─── APP PRINCIPAL (por empresa) ─────────────────────────────────────────────
 export default function PontoApp() {
   const [companySlug, setCompanySlug] = useState<string|null>(null)
-  const [companyMeta, setCompanyMeta] = useState<CompanyMeta|null>(null)
   const [isSuperAdmin, setIsSuperAdmin] = useState(false)
 
   // Se ainda não escolheu empresa, mostra tela de seleção
@@ -320,14 +319,14 @@ export default function PontoApp() {
   }
 
   if (isSuperAdmin) {
-    return <SuperAdminLogin onSuccess={() => {}} onLogout={() => { setCompanySlug(null); setIsSuperAdmin(false) }} />
+    return <SuperAdminLogin onLogout={() => { setCompanySlug(null); setIsSuperAdmin(false) }} />
   }
 
-  return <CompanyApp slug={companySlug} onLogout={() => { setCompanySlug(null); setCompanyMeta(null) }} />
+  return <CompanyApp slug={companySlug} onLogout={() => { setCompanySlug(null) }} />
 }
 
 // ─── LOGIN SUPER ADMIN ───────────────────────────────────────────────────────
-function SuperAdminLogin({ onSuccess, onLogout }: { onSuccess: ()=>void; onLogout: ()=>void }) {
+function SuperAdminLogin({ onLogout }: { onLogout: ()=>void }) {
   const [user, setUser] = useState('')
   const [pass, setPass] = useState('')
   const [error, setError] = useState('')
@@ -1314,7 +1313,7 @@ function CompanyApp({ slug, onLogout }: { slug: string; onLogout: ()=>void }) {
                           const ms=state.dailyWork[date]||0
                           const off=state.dailyOff?.[date]
                           const isToday=date===TODAY()
-                          const [y,mo,d]=date.split('-')
+                          const [_y,mo,d]=date.split('-')
                           const dow=new Date(date+'T12:00:00').toLocaleDateString('pt-BR',{weekday:'short'})
                           const isEditing=editingDay?.empId===emp.id&&editingDay?.date===date
                           return (
