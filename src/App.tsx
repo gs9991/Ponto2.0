@@ -12,1563 +12,1158 @@ const firebaseConfig = {
 }
 const firebaseApp = initializeApp(firebaseConfig)
 const db = initializeFirestore(firebaseApp, { experimentalForceLongPolling: true })
-
-// ─── CREDENCIAIS ────────────────────────────────────────────────────────────
-// Super-admin: acessa todas as empresas e pode criar/excluir empresas
 const SUPER_ADMIN = { username: 'superadmin', password: 'super@2024' }
 
-function formatTime(d: Date) { return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) }
-function formatDate(d: Date) { return d.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' }) }
-function formatDateShort(d: Date) { return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' }) }
-function formatDuration(ms: number) {
-  if (!ms || ms < 0) return '00:00:00'
-  const t = Math.floor(ms / 1000)
-  return `${String(Math.floor(t/3600)).padStart(2,'0')}:${String(Math.floor((t%3600)/60)).padStart(2,'0')}:${String(t%60).padStart(2,'0')}`
-}
-function formatHours(ms: number) { return !ms || ms < 0 ? '0.00h' : (ms/3600000).toFixed(2)+'h' }
-function fmt(v: number) { return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) }
-function msToHHMM(ms: number) {
-  if (!ms || ms < 0) return '0h00'
-  const t = Math.floor(ms/60000); return `${Math.floor(t/60)}h${String(t%60).padStart(2,'0')}`
-}
-function getDaysInMonth(year: number, month: number) {
-  const days: string[] = []; const d = new Date(year, month, 1)
-  while (d.getMonth() === month) { days.push(d.toISOString().split('T')[0]); d.setDate(d.getDate()+1) }
-  return days
-}
-const TODAY = () => new Date().toISOString().split('T')[0]
-const STATUS = { OUT: 'out', IN: 'in', BREAK: 'break' }
-const statusLabel: Record<string,string> = { out:'Fora', in:'Trabalhando', break:'Pausa' }
-const statusColor: Record<string,string> = { out:'#94a3b8', in:'#22c55e', break:'#f59e0b' }
-const typeLabel: Record<string,string> = { entrada:'Entrada', saida:'Saída', inicio_pausa:'Início Pausa', fim_pausa:'Fim Pausa' }
-const typeColor: Record<string,string> = { entrada:'#22c55e', saida:'#ef4444', inicio_pausa:'#f59e0b', fim_pausa:'#3b82f6' }
-
-interface Discount { id: number; value: number; reason: string; date: string }
-interface Company { name: string; cnpj: string; address: string; phone: string; email: string; logo: string }
-interface CompanyMeta {
-  slug: string          // código único ex: "empresa123"
-  name: string
-  adminUsername: string
-  adminPassword: string
-  createdAt: string
-}
-interface Employee {
-  id: number; name: string; role: string; username: string; password: string; avatar: string
-  payType: 'day'|'hour'; payValue: number; hoursPerDay: number
-  overtimeRate: 50|70|100
-  discounts: Discount[]; gratifications: Discount[]
-  cpf?: string; admission?: string; fgts?: boolean
-  companySlug: string   // para filtrar por empresa
-}
-interface LogEntry { type: string; time: Date }
-interface EmpState {
-  status: string; log: LogEntry[]; workStart: Date|null; breakStart: Date|null
-  totalWork: number; totalBreak: number; days: string[]
-  dailyWork: Record<string,number>
-  dailyOff: Record<string,'paid'|'unpaid'>
-  dailyNight: Record<string,number>
-  dailyOvertimeRate: Record<string,number>
-}
-interface User {
-  id: number; name: string; username: string; avatar: string; role: string
-  payType: 'day'|'hour'; payValue: number; hoursPerDay: number; discounts: Discount[]
-  companySlug?: string
+// ─── Inject fonts ─────────────────────────────────────────────────────────────
+if (!document.getElementById('pf')) {
+  const s = document.createElement('style'); s.id = 'pf'
+  s.textContent = `@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,400;0,600;0,700;0,900;1,400&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap');
+  *{box-sizing:border-box}
+  ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:#E2E8F0;border-radius:4px}
+  input[type=month]::-webkit-calendar-picker-indicator{opacity:0.5;cursor:pointer}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes shimmer{0%{background-position:-200%}100%{background-position:200%}}
+  .fade-up{animation:fadeUp .35s cubic-bezier(.22,1,.36,1) both}
+  `
+  document.head.appendChild(s)
 }
 
-function Input({ label, type='text', value, onChange, placeholder, error }: {
-  label?: string; type?: string; value: string; onChange: (v:string)=>void; placeholder?: string; error?: string
-}) {
-  const [show, setShow] = useState(false)
+// ─── Tokens ──────────────────────────────────────────────────────────────────
+const C = {
+  bg:        '#F7F8FC',
+  bgAlt:     '#FFFFFF',
+  surface:   '#FFFFFF',
+  ink:       '#0F172A',
+  inkMid:    '#475569',
+  inkLight:  '#94A3B8',
+  inkXLight: '#CBD5E1',
+  border:    '#E8EDF5',
+  borderMid: '#CBD5E1',
+  brand:     '#5B4CF5',        // deep violet — confident, premium
+  brandDk:   '#4338CA',
+  brandLt:   '#EEF0FD',
+  brandGlow: 'rgba(91,76,245,.18)',
+  emerald:   '#059669',
+  emeraldLt: '#D1FAE5',
+  amber:     '#D97706',
+  amberLt:   '#FEF3C7',
+  rose:      '#E11D48',
+  roseLt:    '#FFE4E6',
+  sky:       '#0369A1',
+  skyLt:     '#E0F2FE',
+  gold:      '#B45309',
+  goldLt:    '#FEF9C3',
+  ff:        "'Fraunces', Georgia, serif",
+  fb:        "'Plus Jakarta Sans', system-ui, sans-serif",
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+const fmt    = (v: number) => v.toLocaleString('pt-BR',{style:'currency',currency:'BRL'})
+const fmtT   = (d: Date)   => d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})
+const fmtD   = (d: Date)   => d.toLocaleDateString('pt-BR',{weekday:'long',day:'2-digit',month:'long',year:'numeric'})
+const fmtDs  = (d: Date)   => d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric'})
+const fmtDur = (ms: number)=> { if(!ms||ms<0) return '00:00:00'; const t=Math.floor(ms/1000); return `${String(Math.floor(t/3600)).padStart(2,'0')}:${String(Math.floor((t%3600)/60)).padStart(2,'0')}:${String(t%60).padStart(2,'0')}` }
+const fmtH   = (ms: number)=> !ms||ms<0?'0.00h':(ms/3600000).toFixed(2)+'h'
+const fmtHM  = (ms: number)=> { if(!ms||ms<0) return '0h00'; const t=Math.floor(ms/60000); return `${Math.floor(t/60)}h${String(t%60).padStart(2,'0')}` }
+const TODAY  = ()=> new Date().toISOString().split('T')[0]
+const getDaysInMonth = (y:number,m:number)=>{ const d=[],dt=new Date(y,m,1); while(dt.getMonth()===m){d.push(dt.toISOString().split('T')[0]);dt.setDate(dt.getDate()+1)}; return d }
+
+const STATUS = {OUT:'out',IN:'in',BREAK:'break'}
+const sLabel: Record<string,string>  = {out:'Offline',in:'Trabalhando',break:'Em pausa'}
+const sColor: Record<string,string>  = {out:C.inkLight,in:C.emerald,break:C.amber}
+const tLabel: Record<string,string>  = {entrada:'Entrada',saida:'Saída',inicio_pausa:'Início de Pausa',fim_pausa:'Fim de Pausa'}
+const tColor: Record<string,string>  = {entrada:C.emerald,saida:C.rose,inicio_pausa:C.amber,fim_pausa:C.sky}
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+interface Discount   { id:number;value:number;reason:string;date:string }
+interface Company    { name:string;cnpj:string;address:string;phone:string;email:string;logo:string }
+interface CompanyMeta{ slug:string;name:string;adminUsername:string;adminPassword:string;createdAt:string }
+interface Employee   { id:number;name:string;role:string;username:string;password:string;avatar:string;payType:'day'|'hour';payValue:number;hoursPerDay:number;overtimeRate:50|70|100;discounts:Discount[];gratifications:Discount[];cpf?:string;admission?:string;fgts?:boolean;companySlug:string }
+interface LogEntry   { type:string;time:Date }
+interface EmpState   { status:string;log:LogEntry[];workStart:Date|null;breakStart:Date|null;totalWork:number;totalBreak:number;days:string[];dailyWork:Record<string,number>;dailyOff:Record<string,'paid'|'unpaid'>;dailyNight:Record<string,number>;dailyOvertimeRate:Record<string,number> }
+interface User       { id:number;name:string;username:string;avatar:string;role:string;payType:'day'|'hour';payValue:number;hoursPerDay:number;discounts:Discount[];companySlug?:string }
+
+function calcNightMs(s:number,e:number){ let n=0; for(let t=s;t<e;t+=60000){ const h=new Date(t).getHours(); if(h>=22||h<5)n+=60000 }; return n }
+
+// ─── Components ───────────────────────────────────────────────────────────────
+function Chip({children,color=C.brand,bg=C.brandLt}:{children:React.ReactNode;color?:string;bg?:string}){
+  return <span style={{display:'inline-flex',alignItems:'center',gap:4,padding:'3px 9px',borderRadius:20,background:bg,color,fontSize:11,fontWeight:600,fontFamily:C.fb,letterSpacing:'0.02em'}}>{children}</span>
+}
+
+function Dot({status}:{status:string}){
   return (
-    <div style={{ marginBottom:14 }}>
-      {label && <div style={{ fontSize:10, letterSpacing:3, color:'#475569', textTransform:'uppercase', marginBottom:6 }}>{label}</div>}
-      <div style={{ position:'relative' }}>
-        <input type={type==='password'&&show?'text':type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder}
-          style={{ width:'100%', boxSizing:'border-box', background:'#0f172a', border:`1px solid ${error?'#ef4444':'#334155'}`, borderRadius:10, padding:'12px 40px 12px 14px', color:'#f1f5f9', fontSize:13, fontFamily:'inherit', outline:'none' }} />
-        {type==='password' && (
-          <button onClick={()=>setShow(s=>!s)} style={{ position:'absolute', right:12, top:'50%', transform:'translateY(-50%)', background:'none', border:'none', cursor:'pointer', color:'#64748b', fontSize:14 }}>
-            {show?'🙈':'👁'}
-          </button>
-        )}
+    <span style={{display:'inline-flex',alignItems:'center',gap:6}}>
+      <span style={{width:7,height:7,borderRadius:'50%',background:sColor[status],boxShadow:status===STATUS.IN?`0 0 0 3px ${C.emeraldLt}`:undefined,display:'inline-block'}}/>
+      <span style={{fontFamily:C.fb,fontSize:11,fontWeight:600,color:sColor[status]}}>{sLabel[status]}</span>
+    </span>
+  )
+}
+
+function Input({label,type='text',value,onChange,placeholder,error,hint,autoFocus}:{
+  label?:string;type?:string;value:string;onChange:(v:string)=>void;placeholder?:string;error?:string;hint?:string;autoFocus?:boolean
+}){
+  const [show,setShow]=useState(false)
+  return (
+    <div style={{marginBottom:16}}>
+      {label&&<div style={{fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:'0.06em',textTransform:'uppercase',marginBottom:7}}>{label}</div>}
+      <div style={{position:'relative'}}>
+        <input autoFocus={autoFocus} type={type==='password'&&show?'text':type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder}
+          style={{width:'100%',background:C.bg,border:`1.5px solid ${error?C.rose:C.border}`,borderRadius:10,padding:'12px 40px 12px 14px',color:C.ink,fontSize:14,fontFamily:C.fb,outline:'none',transition:'border-color .15s, box-shadow .15s'}}
+          onFocus={e=>{e.target.style.borderColor=error?C.rose:C.brand;e.target.style.boxShadow=`0 0 0 3px ${error?C.roseLt:C.brandGlow}`}}
+          onBlur={e=>{e.target.style.borderColor=error?C.rose:C.border;e.target.style.boxShadow='none'}}
+        />
+        {type==='password'&&<button onClick={()=>setShow(s=>!s)} style={{position:'absolute',right:12,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',color:C.inkLight,fontSize:15,padding:0}}>{show?'🙈':'👁'}</button>}
       </div>
-      {error && <div style={{ fontSize:11, color:'#ef4444', marginTop:4 }}>{error}</div>}
+      {hint&&!error&&<p style={{fontFamily:C.fb,fontSize:11,color:C.inkLight,margin:'5px 0 0'}}>{hint}</p>}
+      {error&&<p style={{fontFamily:C.fb,fontSize:11,color:C.rose,margin:'5px 0 0',fontWeight:500}}>⚠ {error}</p>}
     </div>
   )
 }
 
-function Btn({ children, onClick, color='#6366f1', disabled, full, small, outline }: {
-  children: React.ReactNode; onClick: ()=>void; color?: string
-  disabled?: boolean; full?: boolean; small?: boolean; outline?: boolean
-}) {
+function Btn({children,onClick,variant='brand',full,sm,disabled}:{
+  children:React.ReactNode;onClick:()=>void;variant?:'brand'|'ghost'|'danger'|'success'|'outline';full?:boolean;sm?:boolean;disabled?:boolean
+}){
+  const v:{[k:string]:{bg:string;color:string;border:string;shadow?:string}} = {
+    brand:   {bg:`linear-gradient(135deg,${C.brand},${C.brandDk})`,color:'#fff',border:'transparent',shadow:`0 4px 14px ${C.brandGlow}`},
+    ghost:   {bg:'transparent',color:C.inkMid,border:C.border},
+    danger:  {bg:C.roseLt,color:C.rose,border:C.rose+'40'},
+    success: {bg:C.emeraldLt,color:C.emerald,border:C.emerald+'40'},
+    outline: {bg:'transparent',color:C.brand,border:C.brand},
+  }
+  const s=v[variant]
   return (
-    <button onClick={onClick} disabled={disabled} style={{
-      width:full?'100%':'auto', padding:small?'8px 14px':'13px 20px',
-      borderRadius:10, border:outline?`1.5px solid ${color}`:'none',
-      cursor:disabled?'not-allowed':'pointer',
-      background:disabled?'#1e293b':outline?'transparent':color,
-      color:disabled?'#334155':outline?color:'#fff',
-      fontSize:small?11:13, fontWeight:700, fontFamily:'inherit', opacity:disabled?0.6:1
-    }}>{children}</button>
+    <button onClick={onClick} disabled={disabled} style={{width:full?'100%':'auto',padding:sm?'8px 14px':'12px 20px',borderRadius:10,border:`1.5px solid ${s.border}`,cursor:disabled?'not-allowed':'pointer',background:s.bg,color:s.color,fontSize:sm?12:13,fontWeight:700,fontFamily:C.fb,boxShadow:s.shadow,opacity:disabled?.45:1,letterSpacing:'0.01em',transition:'opacity .15s,transform .1s'}}>
+      {children}
+    </button>
   )
 }
 
-function calcNightMs(startMs: number, endMs: number) {
-  let night = 0
-  for (let t = startMs; t < endMs; t += 60000) {
-    const h = new Date(t).getHours()
-    if (h >= 22 || h < 5) night += 60000
-  }
-  return night
+function Card({children,style,pad=20}:{children:React.ReactNode;style?:object;pad?:number}){
+  return <div style={{background:C.surface,borderRadius:18,border:`1px solid ${C.border}`,boxShadow:'0 1px 4px rgba(15,23,42,.04)',padding:pad,...style}}>{children}</div>
 }
 
-// ─── TELA DE SELEÇÃO DE EMPRESA ─────────────────────────────────────────────
-function CompanySelectScreen({ onSelect }: { onSelect: (slug: string) => void }) {
-  const [slugInput, setSlugInput] = useState('')
-  const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
-
-  const handleContinue = async () => {
-    const slug = slugInput.trim().toLowerCase()
-    if (!slug) { setError('Digite o código da empresa'); return }
-    setLoading(true); setError('')
-    try {
-      const snap = await getDocs(query(collection(db, 'companies'), where('slug', '==', slug)))
-      if (snap.empty) { setError('Empresa não encontrada. Verifique o código.'); setLoading(false); return }
-      onSelect(slug)
-    } catch {
-      setError('Erro ao conectar. Tente novamente.'); setLoading(false)
-    }
-  }
-
+function Stat({label,val,sub,color=C.brand}:{label:string;val:string;sub?:string;color?:string}){
   return (
-    <div style={{ minHeight:'100vh', background:'#0f172a', display:'flex', justifyContent:'center', fontFamily:"'Courier New',monospace" }}>
-      <div style={{ width:'100%', maxWidth:420, display:'flex', flexDirection:'column' }}>
-        <div style={{ height:3, background:'linear-gradient(90deg,#6366f1,#06b6d4,#22c55e)' }} />
-        <div style={{ flex:1, display:'flex', flexDirection:'column', justifyContent:'center', padding:'32px 24px' }}>
-          <div style={{ textAlign:'center', marginBottom:40 }}>
-            <div style={{ display:'inline-flex', alignItems:'center', justifyContent:'center', width:80, height:80, borderRadius:24, background:'linear-gradient(135deg,#6366f1,#06b6d4)', boxShadow:'0 0 40px #6366f140', marginBottom:20, fontSize:36 }}>⏱</div>
-            <div style={{ fontSize:28, fontWeight:900, color:'#f1f5f9' }}>PontoApp</div>
-            <div style={{ fontSize:12, color:'#475569', marginTop:6, letterSpacing:2, textTransform:'uppercase' }}>Controle de Ponto Digital</div>
-          </div>
+    <div style={{flex:1,padding:'12px 8px',background:C.bg,borderRadius:12,textAlign:'center'}}>
+      <div style={{fontFamily:C.fb,fontSize:10,color:C.inkLight,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4}}>{label}</div>
+      <div style={{fontFamily:C.ff,fontSize:16,fontWeight:700,color,lineHeight:1.1}}>{val}</div>
+      {sub&&<div style={{fontFamily:C.fb,fontSize:10,color:C.inkXLight,marginTop:2}}>{sub}</div>}
+    </div>
+  )
+}
 
-          <div style={{ background:'linear-gradient(160deg,#1e293b,#162032)', borderRadius:20, padding:'28px 24px', border:'1px solid #334155' }}>
-            <div style={{ fontSize:14, fontWeight:800, color:'#f1f5f9', marginBottom:6 }}>🏢 Identificar Empresa</div>
-            <div style={{ fontSize:12, color:'#64748b', marginBottom:20 }}>Digite o código da sua empresa para continuar.</div>
-            <Input
-              label="Código da Empresa"
-              value={slugInput}
-              onChange={setSlugInput}
-              placeholder="Ex: minhaempresa"
-              error={error}
-            />
-            <button
-              onClick={handleContinue}
-              disabled={loading}
-              style={{ width:'100%', padding:'14px', borderRadius:12, border:'none', cursor:loading?'wait':'pointer', background:loading?'#334155':'linear-gradient(135deg,#6366f1,#4f46e5)', color:loading?'#64748b':'#fff', fontSize:14, fontWeight:800, fontFamily:'inherit' }}>
-              {loading ? '🔍 Verificando...' : 'CONTINUAR →'}
-            </button>
-          </div>
+function NavBar({tabs,active,onSelect}:{tabs:{key:string;icon:string;label:string}[];active:string;onSelect:(k:string)=>void}){
+  return (
+    <div style={{display:'flex',padding:'8px 8px 12px',gap:2,background:C.surface,borderTop:`1px solid ${C.border}`}}>
+      {tabs.map(t=>{
+        const on=active===t.key
+        return (
+          <button key={t.key} onClick={()=>onSelect(t.key)} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:3,padding:'9px 4px',borderRadius:12,border:'none',cursor:'pointer',background:on?C.brandLt:'transparent',transition:'background .2s'}}>
+            <span style={{fontSize:18,lineHeight:1}}>{t.icon}</span>
+            <span style={{fontFamily:C.fb,fontSize:10,fontWeight:on?700:400,color:on?C.brand:C.inkLight}}>{t.label}</span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
 
-          <div style={{ textAlign:'center', marginTop:20 }}>
-            <button onClick={()=>onSelect('__superadmin__')} style={{ background:'none', border:'none', cursor:'pointer', fontSize:11, color:'#334155', fontFamily:'inherit' }}>
-              Acesso administrativo
-            </button>
+// ─── COMPANY SELECT ───────────────────────────────────────────────────────────
+function CompanySelectScreen({onSelect}:{onSelect:(slug:string)=>void}){
+  const [v,setV]=useState(''); const [err,setErr]=useState(''); const [load,setLoad]=useState(false)
+  const go=async()=>{
+    const slug=v.trim().toLowerCase()
+    if(!slug){setErr('Digite o código da empresa');return}
+    setLoad(true);setErr('')
+    try{
+      const snap=await getDocs(query(collection(db,'companies'),where('slug','==',slug)))
+      if(snap.empty){setErr('Empresa não encontrada. Verifique o código.');setLoad(false);return}
+      onSelect(slug)
+    }catch{setErr('Erro ao conectar. Tente novamente.');setLoad(false)}
+  }
+  return (
+    <div style={{minHeight:'100vh',background:`linear-gradient(160deg, ${C.brandLt} 0%, #F0F4FF 40%, ${C.bg} 100%)`,display:'flex',justifyContent:'center',fontFamily:C.fb,position:'relative',overflow:'hidden'}}>
+      {/* Decorative circles */}
+      <div style={{position:'absolute',top:-120,right:-80,width:400,height:400,borderRadius:'50%',background:`radial-gradient(circle, ${C.brand}12, transparent 70%)`,pointerEvents:'none'}}/>
+      <div style={{position:'absolute',bottom:-60,left:-60,width:300,height:300,borderRadius:'50%',background:`radial-gradient(circle, ${C.emerald}10, transparent 70%)`,pointerEvents:'none'}}/>
+
+      <div style={{width:'100%',maxWidth:420,display:'flex',flexDirection:'column',justifyContent:'center',padding:'40px 24px',position:'relative',zIndex:1}}>
+        <div className="fade-up" style={{textAlign:'center',marginBottom:44}}>
+          <div style={{display:'inline-flex',alignItems:'center',justifyContent:'center',width:76,height:76,borderRadius:24,background:`linear-gradient(135deg,${C.brand},${C.brandDk})`,boxShadow:`0 8px 32px ${C.brandGlow}`,marginBottom:22}}>
+            <span style={{fontSize:34,filter:'grayscale(0)'}}>⏱</span>
           </div>
+          <div style={{fontFamily:C.ff,fontSize:34,fontWeight:900,color:C.ink,letterSpacing:'-0.03em',lineHeight:1.1}}>PontoApp</div>
+          <div style={{fontFamily:C.fb,fontSize:14,color:C.inkMid,marginTop:8,fontWeight:400,fontStyle:'italic'}}>Controle de ponto inteligente</div>
+        </div>
+
+        <Card style={{boxShadow:'0 8px 40px rgba(91,76,245,.10)',animation:'fadeUp .4s .1s cubic-bezier(.22,1,.36,1) both'}}>
+          <div style={{marginBottom:22}}>
+            <div style={{fontFamily:C.ff,fontSize:20,fontWeight:700,color:C.ink,marginBottom:4}}>Acessar empresa</div>
+            <div style={{fontFamily:C.fb,fontSize:13,color:C.inkMid}}>Digite o código fornecido pelo seu gestor.</div>
+          </div>
+          <Input label="Código da empresa" value={v} onChange={setV} placeholder="ex: minhaempresa" error={err} autoFocus />
+          <button onClick={go} disabled={load} style={{width:'100%',padding:'15px',borderRadius:12,border:'none',background:load?C.border:`linear-gradient(135deg,${C.brand},${C.brandDk})`,color:load?C.inkLight:'#fff',fontSize:15,fontWeight:700,fontFamily:C.ff,cursor:load?'wait':'pointer',boxShadow:load?'none':`0 6px 24px ${C.brandGlow}`,letterSpacing:'0.01em',transition:'all .2s'}}>
+            {load?'Verificando…':'Entrar →'}
+          </button>
+        </Card>
+
+        <div style={{textAlign:'center',marginTop:20}}>
+          <button onClick={()=>onSelect('__superadmin__')} style={{background:'none',border:'none',cursor:'pointer',fontFamily:C.fb,fontSize:12,color:C.inkXLight}}>Acesso administrativo</button>
         </div>
       </div>
     </div>
   )
 }
 
-// ─── TELA SUPER-ADMIN ────────────────────────────────────────────────────────
-function SuperAdminScreen({ onLogout }: { onLogout: () => void }) {
-  const [companies, setCompanies] = useState<CompanyMeta[]>([])
-  const [view, setView] = useState<'list'|'new'>('list')
-  const [form, setForm] = useState({ slug:'', name:'', adminUsername:'', adminPassword:'' })
-  const [formErrors, setFormErrors] = useState<Record<string,string>>({})
-  const [successMsg, setSuccessMsg] = useState('')
-  const [now, setNow] = useState(new Date())
+// ─── SUPER ADMIN SCREEN ───────────────────────────────────────────────────────
+function SuperAdminScreen({onLogout}:{onLogout:()=>void}){
+  const [companies,setCompanies]=useState<CompanyMeta[]>([])
+  const [view,setView]=useState<'list'|'new'>('list')
+  const [form,setForm]=useState({slug:'',name:'',adminUsername:'',adminPassword:''})
+  const [errs,setErrs]=useState<Record<string,string>>({})
+  const [ok,setOk]=useState('')
+  const [now,setNow]=useState(new Date())
+  const [copied,setCopied]=useState<string|null>(null)
 
-  useEffect(() => { const t = setInterval(()=>setNow(new Date()),1000); return ()=>clearInterval(t) }, [])
+  useEffect(()=>{const t=setInterval(()=>setNow(new Date()),1000);return()=>clearInterval(t)},[])
+  useEffect(()=>{const u=onSnapshot(collection(db,'companies'),s=>{setCompanies(s.docs.map(d=>d.data() as CompanyMeta))});return()=>u()},[])
 
-  useEffect(() => {
-    const unsub = onSnapshot(collection(db, 'companies'), snap => {
-      setCompanies(snap.docs.map(d => d.data() as CompanyMeta))
-    }); return () => unsub()
-  }, [])
-
-  const validateForm = () => {
-    const e: Record<string,string> = {}
-    if (!form.slug.trim()) e.slug = 'Código obrigatório'
-    else if (!/^[a-z0-9_-]+$/.test(form.slug.trim())) e.slug = 'Apenas letras minúsculas, números, - e _'
-    else if (companies.find(c => c.slug === form.slug.trim())) e.slug = 'Código já em uso'
-    if (!form.name.trim()) e.name = 'Nome obrigatório'
-    if (!form.adminUsername.trim()) e.adminUsername = 'Usuário obrigatório'
-    if (!form.adminPassword.trim()) e.adminPassword = 'Senha obrigatória'
+  const validate=()=>{
+    const e:Record<string,string>={}
+    if(!form.slug.trim())e.slug='Obrigatório'
+    else if(!/^[a-z0-9_-]+$/.test(form.slug))e.slug='Apenas minúsculas, números, - e _'
+    else if(companies.find(c=>c.slug===form.slug))e.slug='Código já em uso'
+    if(!form.name.trim())e.name='Obrigatório'
+    if(!form.adminUsername.trim())e.adminUsername='Obrigatório'
+    if(!form.adminPassword.trim())e.adminPassword='Obrigatório'
     return e
   }
-
-  const saveCompany = async () => {
-    const e = validateForm(); if (Object.keys(e).length) { setFormErrors(e); return }
-    const slug = form.slug.trim().toLowerCase()
-    const meta: CompanyMeta = { slug, name:form.name.trim(), adminUsername:form.adminUsername.trim(), adminPassword:form.adminPassword, createdAt: new Date().toISOString() }
-    await setDoc(doc(db, 'companies', slug), meta)
-    // Também salvar config inicial da empresa
-    await setDoc(doc(db, `companies/${slug}/config`, 'company'), { name:form.name.trim(), cnpj:'', address:'', phone:'', email:'', logo:'' })
-    setSuccessMsg(`Empresa "${form.name}" criada!`)
-    setTimeout(() => setSuccessMsg(''), 4000)
-    setForm({ slug:'', name:'', adminUsername:'', adminPassword:'' }); setFormErrors({}); setView('list')
+  const save=async()=>{
+    const e=validate();if(Object.keys(e).length){setErrs(e);return}
+    const slug=form.slug.trim()
+    await setDoc(doc(db,'companies',slug),{slug,name:form.name.trim(),adminUsername:form.adminUsername.trim(),adminPassword:form.adminPassword,createdAt:new Date().toISOString()})
+    await setDoc(doc(db,`companies/${slug}/config`,'company'),{name:form.name.trim(),cnpj:'',address:'',phone:'',email:'',logo:''})
+    setOk(`"${form.name}" criada com sucesso!`);setTimeout(()=>setOk(''),4000)
+    setForm({slug:'',name:'',adminUsername:'',adminPassword:''});setErrs({});setView('list')
   }
-
-  const deleteCompany = async (slug: string) => {
-    if (!window.confirm(`Excluir a empresa "${slug}"? Isso não remove os dados dos funcionários.`)) return
-    await deleteDoc(doc(db, 'companies', slug))
-  }
+  const del=async(slug:string)=>{if(!window.confirm(`Excluir "${slug}"?`))return;await deleteDoc(doc(db,'companies',slug))}
+  const copy=(slug:string)=>{navigator.clipboard.writeText(slug);setCopied(slug);setTimeout(()=>setCopied(null),2000)}
 
   return (
-    <div style={{ minHeight:'100vh', background:'#0f172a', display:'flex', justifyContent:'center', fontFamily:"'Courier New',monospace" }}>
-      <div style={{ width:'100%', maxWidth:420, minHeight:'100vh', background:'#0f172a', display:'flex', flexDirection:'column' }}>
-        <div style={{ height:3, background:'linear-gradient(90deg,#f59e0b,#ef4444,#6366f1)' }} />
-
+    <div style={{minHeight:'100vh',background:C.bg,display:'flex',justifyContent:'center',fontFamily:C.fb}}>
+      <div style={{width:'100%',maxWidth:420,display:'flex',flexDirection:'column'}}>
         {/* Header */}
-        <div style={{ padding:'16px 20px 12px', borderBottom:'1px solid #1e293b', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+        <div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:'18px 20px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
           <div>
-            <div style={{ fontSize:9, letterSpacing:4, color:'#f59e0b', textTransform:'uppercase' }}>Super Admin</div>
-            <div style={{ fontSize:18, fontWeight:900, color:'#f1f5f9' }}>🛡 PontoApp</div>
+            <Chip color={C.gold} bg={C.goldLt}>Master</Chip>
+            <div style={{fontFamily:C.ff,fontSize:22,fontWeight:800,color:C.ink,marginTop:4,letterSpacing:'-0.02em'}}>Gestão de Empresas</div>
           </div>
-          <div style={{ textAlign:'right', background:'#1e293b', borderRadius:12, padding:'8px 14px', border:'1px solid #334155' }}>
-            <div style={{ fontSize:16, fontWeight:700, color:'#f59e0b' }}>{formatTime(now)}</div>
+          <div style={{display:'flex',alignItems:'center',gap:10}}>
+            <div style={{fontFamily:C.ff,fontSize:16,fontWeight:700,color:C.brand,background:C.brandLt,borderRadius:10,padding:'6px 14px'}}>{fmtT(now)}</div>
+            <Btn sm variant="danger" onClick={onLogout}>Sair</Btn>
           </div>
         </div>
 
-        <div style={{ flex:1, overflowY:'auto', padding:'16px 20px 24px' }}>
-          {successMsg && <div style={{ background:'#16a34a20', border:'1px solid #22c55e60', borderRadius:10, padding:'10px 14px', marginBottom:14, fontSize:12, color:'#22c55e', fontWeight:600 }}>✅ {successMsg}</div>}
+        <div style={{flex:1,overflowY:'auto',padding:'18px 16px 32px'}}>
+          {ok&&<div className="fade-up" style={{background:C.emeraldLt,border:`1px solid ${C.emerald}40`,borderRadius:12,padding:'12px 16px',marginBottom:14,fontFamily:C.fb,fontSize:13,color:C.emerald,fontWeight:600}}>✓ {ok}</div>}
 
-          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
-            <div>
-              <div style={{ fontSize:10, letterSpacing:3, color:'#f59e0b', textTransform:'uppercase' }}>Empresas Cadastradas</div>
-              <div style={{ fontSize:12, color:'#64748b', marginTop:2 }}>{companies.length} empresa(s)</div>
-            </div>
-            <Btn small color="#f59e0b" onClick={()=>setView(view==='new'?'list':'new')}>
-              {view==='new' ? '← Voltar' : '+ Nova Empresa'}
-            </Btn>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:18}}>
+            <div style={{fontFamily:C.fb,fontSize:13,color:C.inkMid}}>{companies.length} empresa{companies.length!==1?'s':''} cadastrada{companies.length!==1?'s':''}</div>
+            <Btn sm onClick={()=>setView(view==='new'?'list':'new')} variant={view==='new'?'ghost':'brand'}>{view==='new'?'← Voltar':'+ Nova empresa'}</Btn>
           </div>
 
-          {view==='new' && (
-            <div style={{ background:'#1e293b', borderRadius:16, padding:18, border:'1px solid #f59e0b30', marginBottom:16 }}>
-              <div style={{ fontSize:14, fontWeight:800, color:'#f1f5f9', marginBottom:16 }}>➕ Nova Empresa</div>
+          {view==='new'&&(
+            <Card style={{marginBottom:16,border:`1px solid ${C.brand}30`}} className="fade-up">
+              <div style={{fontFamily:C.ff,fontSize:18,fontWeight:700,color:C.ink,marginBottom:18}}>Nova empresa</div>
+              <Input label="Nome da empresa" value={form.name} onChange={v=>{
+                const slug=v.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')
+                setForm(f=>({...f,name:v,slug:f.slug===''||f.slug===form.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')?slug:f.slug}))
+              }} placeholder="Ex: Mercado Central LTDA" error={errs.name}/>
 
-              <Input label="Nome da Empresa" value={form.name} onChange={v => {
-                // Auto-sugere o slug a partir do nome se o slug ainda não foi editado manualmente
-                const autoSlug = v.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')
-                setForm(f => ({ ...f, name: v, slug: f.slug === '' || f.slug === form.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'') ? autoSlug : f.slug }))
-              }} placeholder="Ex: Mercearia do Zé LTDA" error={formErrors.name} />
-
-              <div style={{ marginBottom:14 }}>
-                <div style={{ fontSize:10, letterSpacing:3, color:'#f59e0b', textTransform:'uppercase', marginBottom:6 }}>Código de Acesso (slug)</div>
-                <div style={{ position:'relative' }}>
-                  <input
-                    value={form.slug}
-                    onChange={e => setForm(f => ({ ...f, slug: e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g,'') }))}
-                    placeholder="Ex: mercearia-ze"
-                    style={{ width:'100%', boxSizing:'border-box', background:'#0f172a', border:`1px solid ${formErrors.slug?'#ef4444':'#f59e0b60'}`, borderRadius:10, padding:'12px 14px', color:'#f59e0b', fontSize:14, fontWeight:800, fontFamily:'inherit', outline:'none', letterSpacing:1 }}
-                  />
-                </div>
-                {formErrors.slug && <div style={{ fontSize:11, color:'#ef4444', marginTop:4 }}>{formErrors.slug}</div>}
-                <div style={{ fontSize:10, color:'#475569', marginTop:6 }}>
-                  Este é o código que o cliente digitará para acessar o app. Use apenas letras minúsculas, números, <code style={{color:'#64748b'}}>-</code> e <code style={{color:'#64748b'}}>_</code>.
-                </div>
-                {form.slug && (
-                  <div style={{ marginTop:8, background:'#0f172a', borderRadius:8, padding:'8px 12px', border:'1px solid #f59e0b20', fontSize:12, color:'#64748b' }}>
-                    Preview: <span style={{ color:'#f59e0b', fontWeight:800 }}>{form.slug}</span>
-                  </div>
-                )}
+              <div style={{marginBottom:16}}>
+                <div style={{fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.brand,letterSpacing:'0.06em',textTransform:'uppercase',marginBottom:7}}>🔑 Código de acesso</div>
+                <input value={form.slug} onChange={e=>setForm(f=>({...f,slug:e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g,'')}))}
+                  placeholder="ex: mercado-central"
+                  style={{width:'100%',background:C.brandLt,border:`1.5px solid ${errs.slug?C.rose:C.brand}30`,borderRadius:10,padding:'13px 16px',color:C.brand,fontSize:17,fontFamily:C.ff,fontWeight:700,outline:'none',letterSpacing:'0.03em'}}
+                  onFocus={e=>{e.target.style.borderColor=C.brand}}
+                />
+                {errs.slug&&<p style={{fontFamily:C.fb,fontSize:11,color:C.rose,margin:'5px 0 0'}}>⚠ {errs.slug}</p>}
+                {form.slug&&<p style={{fontFamily:C.fb,fontSize:11,color:C.inkMid,margin:'5px 0 0'}}>Clientes digitarão: <strong style={{color:C.brand}}>{form.slug}</strong></p>}
               </div>
 
-              <Input label="Usuário do Admin" value={form.adminUsername} onChange={v=>setForm(f=>({...f,adminUsername:v}))} placeholder="Ex: admin" error={formErrors.adminUsername} />
-              <Input label="Senha do Admin" type="password" value={form.adminPassword} onChange={v=>setForm(f=>({...f,adminPassword:v}))} placeholder="Senha de acesso do admin" error={formErrors.adminPassword} />
-              <Btn full color="#f59e0b" onClick={saveCompany}>✅ Criar Empresa</Btn>
-            </div>
+              <Input label="Usuário do admin" value={form.adminUsername} onChange={v=>setForm(f=>({...f,adminUsername:v}))} placeholder="admin" error={errs.adminUsername}/>
+              <Input label="Senha do admin" type="password" value={form.adminPassword} onChange={v=>setForm(f=>({...f,adminPassword:v}))} error={errs.adminPassword}/>
+              <button onClick={save} style={{width:'100%',padding:'14px',borderRadius:12,border:'none',background:`linear-gradient(135deg,${C.brand},${C.brandDk})`,color:'#fff',fontSize:14,fontWeight:700,fontFamily:C.ff,cursor:'pointer',boxShadow:`0 6px 20px ${C.brandGlow}`,letterSpacing:'0.01em'}}>
+                Criar empresa →
+              </button>
+            </Card>
           )}
 
-          {view==='list' && (
-            <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
-              {companies.length === 0 && (
-                <div style={{ textAlign:'center', padding:'50px 0', color:'#475569' }}>
-                  <div style={{ fontSize:36, marginBottom:10 }}>🏢</div>
-                  <div style={{ fontSize:13 }}>Nenhuma empresa cadastrada</div>
-                  <div style={{ fontSize:11, marginTop:6 }}>Clique em "+ Nova Empresa" para começar</div>
+          {view==='list'&&(
+            <div style={{display:'flex',flexDirection:'column',gap:12}}>
+              {companies.length===0&&(
+                <div style={{textAlign:'center',padding:'60px 0',color:C.inkLight}}>
+                  <div style={{fontSize:48,marginBottom:12}}>🏢</div>
+                  <div style={{fontFamily:C.ff,fontSize:16,fontWeight:600,color:C.inkMid}}>Nenhuma empresa ainda</div>
+                  <div style={{fontFamily:C.fb,fontSize:13,marginTop:6}}>Comece criando a primeira!</div>
                 </div>
               )}
-              {companies.map(c => (
-                <div key={c.slug} style={{ background:'#1e293b', borderRadius:14, padding:16, border:'1px solid #334155' }}>
-                  {/* Código em destaque */}
-                  <div style={{ background:'#0f172a', borderRadius:10, padding:'10px 14px', marginBottom:12, border:'1px solid #f59e0b30', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-                    <div>
-                      <div style={{ fontSize:9, letterSpacing:3, color:'#f59e0b', textTransform:'uppercase', marginBottom:3 }}>🔑 Código de Acesso</div>
-                      <div style={{ fontSize:20, fontWeight:900, color:'#f59e0b', letterSpacing:2 }}>{c.slug}</div>
+              {companies.map(c=>(
+                <Card key={c.slug} style={{overflow:'hidden',padding:0}}>
+                  {/* Accent bar */}
+                  <div style={{height:4,background:`linear-gradient(90deg,${C.brand},${C.emerald})`}}/>
+                  <div style={{padding:18}}>
+                    <div style={{background:C.brandLt,borderRadius:12,padding:'12px 16px',marginBottom:14,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                      <div>
+                        <div style={{fontFamily:C.fb,fontSize:10,color:C.brand,fontWeight:700,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:4}}>Código de acesso</div>
+                        <div style={{fontFamily:C.ff,fontSize:22,fontWeight:900,color:C.brand,letterSpacing:'0.03em'}}>{c.slug}</div>
+                      </div>
+                      <button onClick={()=>copy(c.slug)} style={{background:copied===c.slug?C.emeraldLt:C.surface,border:`1.5px solid ${copied===c.slug?C.emerald:C.border}`,borderRadius:10,padding:'8px 14px',cursor:'pointer',fontFamily:C.fb,fontSize:12,fontWeight:700,color:copied===c.slug?C.emerald:C.inkMid,transition:'all .2s'}}>
+                        {copied===c.slug?'✓ Copiado!':'📋 Copiar'}
+                      </button>
                     </div>
-                    <button
-                      onClick={() => { navigator.clipboard.writeText(c.slug); }}
-                      title="Copiar código"
-                      style={{ background:'#f59e0b20', border:'1px solid #f59e0b40', borderRadius:8, padding:'8px 12px', cursor:'pointer', fontSize:12, color:'#f59e0b', fontFamily:'inherit', fontWeight:700 }}>
-                      📋 Copiar
-                    </button>
-                  </div>
-                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
-                    <div>
-                      <div style={{ fontSize:14, fontWeight:800, color:'#f1f5f9', marginBottom:6 }}>{c.name}</div>
-                      <div style={{ fontSize:11, color:'#64748b' }}>Admin: <span style={{ color:'#94a3b8', fontWeight:700 }}>{c.adminUsername}</span></div>
-                      <div style={{ fontSize:10, color:'#475569', marginTop:3 }}>Criada em {new Date(c.createdAt).toLocaleDateString('pt-BR')}</div>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+                      <div>
+                        <div style={{fontFamily:C.ff,fontSize:16,fontWeight:700,color:C.ink,marginBottom:4}}>{c.name}</div>
+                        <div style={{fontFamily:C.fb,fontSize:12,color:C.inkMid}}>Admin: <strong style={{color:C.ink}}>{c.adminUsername}</strong></div>
+                        <div style={{fontFamily:C.fb,fontSize:11,color:C.inkLight,marginTop:2}}>Criada em {new Date(c.createdAt).toLocaleDateString('pt-BR')}</div>
+                      </div>
+                      <Btn sm variant="danger" onClick={()=>del(c.slug)}>Excluir</Btn>
                     </div>
-                    <Btn small outline color="#ef4444" onClick={()=>deleteCompany(c.slug)}>🗑</Btn>
                   </div>
-                </div>
+                </Card>
               ))}
             </div>
           )}
         </div>
-
-        <div style={{ padding:'12px 20px', borderTop:'1px solid #1e293b', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-          <div style={{ fontSize:9, color:'#334155', letterSpacing:2, textTransform:'uppercase' }}>🛡 Super Administrador</div>
-          <button onClick={onLogout} style={{ background:'none', border:'none', cursor:'pointer', fontSize:11, color:'#ef4444', fontFamily:'inherit', fontWeight:700 }}>Sair →</button>
-        </div>
       </div>
     </div>
   )
 }
 
-// ─── APP PRINCIPAL (por empresa) ─────────────────────────────────────────────
-export default function PontoApp() {
-  const [companySlug, setCompanySlug] = useState<string|null>(null)
-  const [isSuperAdmin, setIsSuperAdmin] = useState(false)
-
-  // Se ainda não escolheu empresa, mostra tela de seleção
-  if (!companySlug) {
-    return <CompanySelectScreen onSelect={slug => {
-      if (slug === '__superadmin__') {
-        setIsSuperAdmin(true)
-        setCompanySlug('__superadmin__')
-      } else {
-        setCompanySlug(slug)
-      }
-    }} />
-  }
-
-  if (isSuperAdmin) {
-    return <SuperAdminLogin onLogout={() => { setCompanySlug(null); setIsSuperAdmin(false) }} />
-  }
-
-  return <CompanyApp slug={companySlug} onLogout={() => { setCompanySlug(null) }} />
-}
-
-// ─── LOGIN SUPER ADMIN ───────────────────────────────────────────────────────
-function SuperAdminLogin({ onLogout }: { onLogout: ()=>void }) {
-  const [user, setUser] = useState('')
-  const [pass, setPass] = useState('')
-  const [error, setError] = useState('')
-  const [authed, setAuthed] = useState(false)
-
-  const login = () => {
-    if (user === SUPER_ADMIN.username && pass === SUPER_ADMIN.password) { setAuthed(true); setError('') }
-    else setError('Credenciais incorretas.')
-  }
-
-  if (authed) return <SuperAdminScreen onLogout={onLogout} />
-
+// ─── SUPER ADMIN LOGIN ────────────────────────────────────────────────────────
+function SuperAdminLogin({onLogout}:{onLogout:()=>void}){
+  const [u,setU]=useState('');const [p,setP]=useState('');const [err,setErr]=useState('');const [ok,setOk]=useState(false)
+  const login=()=>{ if(u===SUPER_ADMIN.username&&p===SUPER_ADMIN.password){setOk(true);setErr('')}else setErr('Credenciais incorretas.') }
+  if(ok) return <SuperAdminScreen onLogout={onLogout}/>
   return (
-    <div style={{ minHeight:'100vh', background:'#0f172a', display:'flex', justifyContent:'center', fontFamily:"'Courier New',monospace" }}>
-      <div style={{ width:'100%', maxWidth:420, display:'flex', flexDirection:'column' }}>
-        <div style={{ height:3, background:'linear-gradient(90deg,#f59e0b,#ef4444,#6366f1)' }} />
-        <div style={{ flex:1, display:'flex', flexDirection:'column', justifyContent:'center', padding:'32px 24px' }}>
-          <div style={{ textAlign:'center', marginBottom:36 }}>
-            <div style={{ fontSize:48, marginBottom:12 }}>🛡</div>
-            <div style={{ fontSize:22, fontWeight:900, color:'#f1f5f9' }}>Acesso Restrito</div>
-            <div style={{ fontSize:12, color:'#475569', marginTop:6, letterSpacing:2, textTransform:'uppercase' }}>Super Administrador</div>
-          </div>
-          <div style={{ background:'linear-gradient(160deg,#1e293b,#162032)', borderRadius:20, padding:'28px 24px', border:'1px solid #f59e0b30' }}>
-            <Input label="Usuário" value={user} onChange={setUser} placeholder="superadmin" />
-            <Input label="Senha" type="password" value={pass} onChange={setPass} placeholder="••••••••" error={error} />
-            <button onClick={login} style={{ width:'100%', padding:'14px', borderRadius:12, border:'none', cursor:'pointer', background:'linear-gradient(135deg,#f59e0b,#d97706)', color:'#000', fontSize:14, fontWeight:800, fontFamily:'inherit', marginTop:8 }}>
-              ENTRAR →
-            </button>
-          </div>
-          <div style={{ textAlign:'center', marginTop:16 }}>
-            <button onClick={onLogout} style={{ background:'none', border:'none', cursor:'pointer', fontSize:11, color:'#475569', fontFamily:'inherit' }}>← Voltar</button>
-          </div>
+    <div style={{minHeight:'100vh',background:`linear-gradient(160deg,${C.goldLt},${C.bg} 50%)`,display:'flex',justifyContent:'center',fontFamily:C.fb}}>
+      <div style={{width:'100%',maxWidth:420,display:'flex',flexDirection:'column',justifyContent:'center',padding:'40px 24px'}}>
+        <div className="fade-up" style={{textAlign:'center',marginBottom:36}}>
+          <div style={{fontSize:52,marginBottom:14}}>🛡</div>
+          <div style={{fontFamily:C.ff,fontSize:26,fontWeight:800,color:C.ink,letterSpacing:'-0.02em'}}>Acesso Restrito</div>
+          <div style={{fontFamily:C.fb,fontSize:13,color:C.inkMid,marginTop:4}}>Painel de super administrador</div>
+        </div>
+        <Card style={{boxShadow:'0 8px 40px rgba(180,83,9,.10)',border:`1px solid ${C.gold}30`,animation:'fadeUp .4s .1s both'}}>
+          <Input label="Usuário" value={u} onChange={setU} placeholder="superadmin"/>
+          <Input label="Senha" type="password" value={p} onChange={setP} error={err}/>
+          <button onClick={login} style={{width:'100%',padding:'14px',borderRadius:12,border:'none',background:`linear-gradient(135deg,${C.gold},${C.amber})`,color:'#fff',fontSize:15,fontWeight:700,fontFamily:C.ff,cursor:'pointer',boxShadow:'0 6px 20px rgba(180,83,9,.25)',marginTop:4}}>
+            Entrar →
+          </button>
+        </Card>
+        <div style={{textAlign:'center',marginTop:16}}>
+          <button onClick={onLogout} style={{background:'none',border:'none',cursor:'pointer',fontFamily:C.fb,fontSize:12,color:C.inkLight}}>← Voltar</button>
         </div>
       </div>
     </div>
   )
 }
 
-// ─── APP DA EMPRESA ──────────────────────────────────────────────────────────
-function CompanyApp({ slug, onLogout }: { slug: string; onLogout: ()=>void }) {
-  const [now, setNow] = useState(new Date())
-  const [companyMeta, setCompanyMeta] = useState<CompanyMeta|null>(null)
-  const [loggedIn, setLoggedIn] = useState<User|null>(null)
-  const [employees, setEmployees] = useState<Employee[]>([])
-  const [records, setRecords] = useState<Record<number,EmpState>>({})
-  const [loading, setLoading] = useState(true)
-  const [view, setView] = useState('clock')
-  const [loginUser, setLoginUser] = useState('')
-  const [loginPass, setLoginPass] = useState('')
-  const [loginError, setLoginError] = useState('')
-  const [adminView, setAdminView] = useState('list')
-  const [editingEmp, setEditingEmp] = useState<Employee|null>(null)
-  const [form, setForm] = useState<any>({ name:'', role:'', username:'', password:'', payType:'day', payValue:'', hoursPerDay:'8', overtimeRate:'50', cpf:'', admission:'', fgts:false })
-  const [formErrors, setFormErrors] = useState<Record<string,string>>({})
-  const [successMsg, setSuccessMsg] = useState('')
-  const [discountTarget, setDiscountTarget] = useState<number|null>(null)
-  const [discountForm, setDiscountForm] = useState({ value:'', reason:'' })
-  const [discountError, setDiscountError] = useState('')
-  const [expandedReport, setExpandedReport] = useState<number|null>(null)
-  const [reportMonth, setReportMonth] = useState(() => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}` })
-  const [isAddingGratif, setIsAddingGratif] = useState(false)
-  const [gratifTarget, setGratifTarget] = useState<number|null>(null)
-  const [gratifForm, setGratifForm] = useState({ value:'', reason:'' })
-  const [gratifError, setGratifError] = useState('')
-  const [mapTarget, setMapTarget] = useState<number|null>(null)
-  const [mapMonth, setMapMonth] = useState(() => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}` })
-  const [editingDay, setEditingDay] = useState<{ empId:number; date:string }|null>(null)
-  const [editHours, setEditHours] = useState('')
-  const [editMinutes, setEditMinutes] = useState('')
-  const [geofence, setGeofence] = useState<{ lat:number; lng:number; radius:number; address:string }|null>(null)
-  const [geoForm, setGeoForm] = useState({ address:'', radius:'100' })
-  const [geoError, setGeoError] = useState('')
-  const [geoSuccess, setGeoSuccess] = useState('')
-  const [geoLoading, setGeoLoading] = useState(false)
-  const [punchBlocked, setPunchBlocked] = useState('')
-  const [punchChecking, setPunchChecking] = useState(false)
-  const [company, setCompany] = useState<Company|null>(null)
-  const [companyForm, setCompanyForm] = useState({ name:'', cnpj:'', address:'', phone:'', email:'', logo:'' })
-  const [companySaved, setCompanySaved] = useState(false)
-  const [companySaveError, setCompanySaveError] = useState('')
+// ─── ROOT ─────────────────────────────────────────────────────────────────────
+export default function PontoApp(){
+  const [slug,setSlug]=useState<string|null>(null)
+  const [sa,setSa]=useState(false)
+  if(!slug) return <CompanySelectScreen onSelect={s=>{ if(s==='__superadmin__'){setSa(true);setSlug('__superadmin__')}else setSlug(s) }}/>
+  if(sa) return <SuperAdminLogin onLogout={()=>{setSlug(null);setSa(false)}}/>
+  return <CompanyApp slug={slug} onLogout={()=>setSlug(null)}/>
+}
 
-  // Coleções isoladas por empresa: companies/{slug}/employees, companies/{slug}/records, etc.
-  const empCol = `companies/${slug}/employees`
-  const recCol = `companies/${slug}/records`
-  const cfgDoc = (id: string) => doc(db, `companies/${slug}/config`, id)
+// ─── COMPANY APP ──────────────────────────────────────────────────────────────
+function CompanyApp({slug,onLogout}:{slug:string;onLogout:()=>void}){
+  const [now,setNow]=useState(new Date())
+  const [meta,setMeta]=useState<CompanyMeta|null>(null)
+  const [user,setUser]=useState<User|null>(null)
+  const [employees,setEmployees]=useState<Employee[]>([])
+  const [records,setRecords]=useState<Record<number,EmpState>>({})
+  const [loading,setLoading]=useState(true)
+  const [view,setView]=useState('clock')
+  const [lu,setLu]=useState('');const [lp,setLp]=useState('');const [le,setLe]=useState('')
+  const [av,setAv]=useState('list')
+  const [editEmp,setEditEmp]=useState<Employee|null>(null)
+  const [form,setForm]=useState<any>({name:'',role:'',username:'',password:'',payType:'day',payValue:'',hoursPerDay:'8',overtimeRate:'50',cpf:'',admission:'',fgts:false})
+  const [fErr,setFErr]=useState<Record<string,string>>({})
+  const [ok,setOk]=useState('')
+  const [dtgt,setDtgt]=useState<number|null>(null)
+  const [dform,setDform]=useState({value:'',reason:''})
+  const [derr,setDerr]=useState('')
+  const [expR,setExpR]=useState<number|null>(null)
+  const [rMonth,setRMonth]=useState(()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`})
+  const [addG,setAddG]=useState(false);const [gtgt,setGtgt]=useState<number|null>(null)
+  const [gform,setGform]=useState({value:'',reason:''});const [gerr,setGerr]=useState('')
+  const [mapTgt,setMapTgt]=useState<number|null>(null)
+  const [mapM,setMapM]=useState(()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`})
+  const [editDay,setEditDay]=useState<{empId:number;date:string}|null>(null)
+  const [editH,setEditH]=useState('');const [editMin,setEditMin]=useState('')
+  const [geo,setGeo]=useState<{lat:number;lng:number;radius:number;address:string}|null>(null)
+  const [geoF,setGeoF]=useState({address:'',radius:'100'})
+  const [geoErr,setGeoErr]=useState('');const [geoOk,setGeoOk]=useState('');const [geoLoad,setGeoLoad]=useState(false)
+  const [blocked,setBlocked]=useState('');const [checking,setChecking]=useState(false)
+  const [co,setCo]=useState<Company|null>(null)
+  const [coForm,setCoForm]=useState({name:'',cnpj:'',address:'',phone:'',email:'',logo:''})
+  const [coSaved,setCoSaved]=useState(false);const [coErr,setCoErr]=useState('')
 
-  useEffect(() => { const t = setInterval(()=>setNow(new Date()),1000); return ()=>clearInterval(t) }, [])
+  const ec=`companies/${slug}/employees`, rc=`companies/${slug}/records`
+  const cfg=(id:string)=>doc(db,`companies/${slug}/config`,id)
 
-  // Carregar meta da empresa
-  useEffect(() => {
-    const unsub = onSnapshot(doc(db, 'companies', slug), snap => {
-      if (snap.exists()) setCompanyMeta(snap.data() as CompanyMeta)
-    }); return ()=>unsub()
-  }, [slug])
+  useEffect(()=>{const t=setInterval(()=>setNow(new Date()),1000);return()=>clearInterval(t)},[])
+  useEffect(()=>{const u=onSnapshot(doc(db,'companies',slug),s=>{if(s.exists())setMeta(s.data() as CompanyMeta)});return()=>u()},[slug])
+  useEffect(()=>{const u=onSnapshot(collection(db,ec),s=>{setEmployees(s.docs.map(d=>({...(d.data() as Employee)})));setLoading(false)});return()=>u()},[slug])
+  useEffect(()=>{const u=onSnapshot(collection(db,rc),s=>{const r:Record<number,EmpState>={};s.docs.forEach(d=>{const dt=d.data();r[Number(d.id)]={...dt,log:(dt.log||[]).map((e:{type:string;time:string})=>({type:e.type,time:new Date(e.time)})),workStart:dt.workStart?new Date(dt.workStart):null,breakStart:dt.breakStart?new Date(dt.breakStart):null,dailyWork:dt.dailyWork||{},dailyOff:dt.dailyOff||{},dailyNight:dt.dailyNight||{},dailyOvertimeRate:dt.dailyOvertimeRate||{}} as EmpState});setRecords(r)});return()=>u()},[slug])
+  useEffect(()=>{const u=onSnapshot(doc(db,`companies/${slug}/config`,'geofence'),s=>{if(s.exists())setGeo(s.data() as any);else setGeo(null)});return()=>u()},[slug])
+  useEffect(()=>{const u=onSnapshot(doc(db,`companies/${slug}/config`,'company'),s=>{if(s.exists()){const d=s.data() as Company;setCo(d);setCoForm({name:d.name||'',cnpj:d.cnpj||'',address:d.address||'',phone:d.phone||'',email:d.email||'',logo:d.logo||''})}});return()=>u()},[slug])
 
-  useEffect(() => {
-    const unsub = onSnapshot(collection(db, empCol), snap => {
-      setEmployees(snap.docs.map(d=>({...(d.data() as Employee)})))
-      setLoading(false)
-    }); return ()=>unsub()
-  }, [slug])
+  const gs=(id:number):EmpState=>records[id]||{status:STATUS.OUT,log:[],workStart:null,breakStart:null,totalWork:0,totalBreak:0,days:[],dailyWork:{},dailyOff:{},dailyNight:{},dailyOvertimeRate:{}}
+  const geocode=async(a:string)=>{try{const r=await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(a)}&limit=1`);const d=await r.json();if(!d.length)return null;return{lat:parseFloat(d[0].lat),lng:parseFloat(d[0].lon)}}catch{return null}}
+  const dist=(a:number,b:number,c:number,d:number)=>{const R=6371000,dLat=(c-a)*Math.PI/180,dLng=(d-b)*Math.PI/180,x=Math.sin(dLat/2)**2+Math.cos(a*Math.PI/180)*Math.cos(c*Math.PI/180)*Math.sin(dLng/2)**2;return R*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x))}
 
-  useEffect(() => {
-    const unsub = onSnapshot(collection(db, recCol), snap => {
-      const recs: Record<number,EmpState> = {}
-      snap.docs.forEach(d => {
-        const data = d.data()
-        recs[Number(d.id)] = {
-          ...data,
-          log: (data.log||[]).map((e:{type:string;time:string})=>({type:e.type,time:new Date(e.time)})),
-          workStart: data.workStart ? new Date(data.workStart) : null,
-          breakStart: data.breakStart ? new Date(data.breakStart) : null,
-          dailyWork: data.dailyWork||{},
-          dailyOff: data.dailyOff||{},
-          dailyNight: data.dailyNight||{},
-          dailyOvertimeRate: data.dailyOvertimeRate||{},
-        } as EmpState
-      })
-      setRecords(recs)
-    }); return ()=>unsub()
-  }, [slug])
-
-  useEffect(() => {
-    const unsub = onSnapshot(doc(db, `companies/${slug}/config`, 'geofence'), snap => {
-      if (snap.exists()) setGeofence(snap.data() as {lat:number;lng:number;radius:number;address:string})
-      else setGeofence(null)
-    }); return ()=>unsub()
-  }, [slug])
-
-  useEffect(() => {
-    const unsub = onSnapshot(doc(db, `companies/${slug}/config`, 'company'), snap => {
-      if (snap.exists()) {
-        const d = snap.data() as Company
-        setCompany(d)
-        setCompanyForm({ name:d.name||'', cnpj:d.cnpj||'', address:d.address||'', phone:d.phone||'', email:d.email||'', logo:d.logo||'' })
-      }
-    }); return ()=>unsub()
-  }, [slug])
-
-  const getState = (id:number): EmpState =>
-    records[id] || { status:STATUS.OUT, log:[], workStart:null, breakStart:null, totalWork:0, totalBreak:0, days:[], dailyWork:{}, dailyOff:{}, dailyNight:{}, dailyOvertimeRate:{} }
-
-  const geocodeAddress = async (address:string) => {
-    try {
-      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}&limit=1`)
-      const data = await res.json()
-      if (!data.length) return null
-      return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) }
-    } catch { return null }
+  const saveGeo=async()=>{
+    setGeoErr('');setGeoOk('');setGeoLoad(true)
+    if(!geoF.address.trim()){setGeoErr('Digite um endereço');setGeoLoad(false);return}
+    const r=Number(geoF.radius);if(!r||r<10||r>5000){setGeoErr('Raio entre 10 e 5000m');setGeoLoad(false);return}
+    const coords=await geocode(geoF.address);if(!coords){setGeoErr('Endereço não encontrado');setGeoLoad(false);return}
+    await setDoc(cfg('geofence'),{...coords,radius:r,address:geoF.address})
+    setGeoOk(`Cerca ativa — raio de ${r}m`);setGeoLoad(false);setTimeout(()=>setGeoOk(''),4000)
   }
 
-  const calcDistance = (lat1:number,lng1:number,lat2:number,lng2:number) => {
-    const R=6371000, dLat=(lat2-lat1)*Math.PI/180, dLng=(lng2-lng1)*Math.PI/180
-    const a=Math.sin(dLat/2)**2+Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)**2
-    return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a))
-  }
-
-  const saveGeofence = async () => {
-    setGeoError(''); setGeoSuccess(''); setGeoLoading(true)
-    if (!geoForm.address.trim()) { setGeoError('Digite um endereço.'); setGeoLoading(false); return }
-    const radius = Number(geoForm.radius)
-    if (!radius||radius<10||radius>5000) { setGeoError('Raio entre 10 e 5000m.'); setGeoLoading(false); return }
-    const coords = await geocodeAddress(geoForm.address)
-    if (!coords) { setGeoError('Endereço não encontrado.'); setGeoLoading(false); return }
-    await setDoc(cfgDoc('geofence'), {...coords, radius, address:geoForm.address})
-    setGeoSuccess(`Cerca ativa! Raio de ${radius}m.`); setGeoLoading(false)
-    setTimeout(()=>setGeoSuccess(''),4000)
-  }
-
-  const punch = (type:string) => {
-    if (!loggedIn||loggedIn.role!=='employee') return
-    setPunchBlocked(''); setPunchChecking(true)
-    const doRegister = async () => {
-      const id = loggedIn.id, state = getState(id), ts = new Date(), todayStr = TODAY()
-      const newLog = [...state.log, {type, time:ts}]
-      let s: EmpState = {...state, log:newLog}
-      if (type==='entrada') {
-        s.status=STATUS.IN; s.workStart=ts
-      } else if (type==='saida') {
-        const workedNow = state.workStart ? ts.getTime()-state.workStart.getTime() : 0
-        const nightNow = state.workStart ? calcNightMs(state.workStart.getTime(), ts.getTime()) : 0
-        s.totalWork=(state.totalWork||0)+workedNow
-        s.dailyWork={...(state.dailyWork||{})}; s.dailyWork[todayStr]=(s.dailyWork[todayStr]||0)+workedNow
-        s.dailyNight={...(state.dailyNight||{})}; s.dailyNight[todayStr]=(s.dailyNight[todayStr]||0)+nightNow
-        s.status=STATUS.OUT; s.workStart=null
-        if (!s.days.includes(todayStr)) s.days=[...s.days, todayStr]
-      } else if (type==='inicio_pausa') {
-        const workedNow = state.workStart ? ts.getTime()-state.workStart.getTime() : 0
-        const nightNow = state.workStart ? calcNightMs(state.workStart.getTime(), ts.getTime()) : 0
-        s.totalWork=(state.totalWork||0)+workedNow
-        s.dailyWork={...(state.dailyWork||{})}; s.dailyWork[todayStr]=(s.dailyWork[todayStr]||0)+workedNow
-        s.dailyNight={...(state.dailyNight||{})}; s.dailyNight[todayStr]=(s.dailyNight[todayStr]||0)+nightNow
-        s.status=STATUS.BREAK; s.workStart=null; s.breakStart=ts
-      } else if (type==='fim_pausa') {
-        s.totalBreak=(state.totalBreak||0)+(state.breakStart?ts.getTime()-state.breakStart.getTime():0)
-        s.status=STATUS.IN; s.breakStart=null; s.workStart=ts
-      }
-      await setDoc(doc(db, recCol, String(id)), {
-        ...s, log:s.log.map(e=>({type:e.type,time:e.time.toISOString()})),
-        workStart:s.workStart?s.workStart.toISOString():null,
-        breakStart:s.breakStart?s.breakStart.toISOString():null,
-      })
-      setPunchChecking(false)
+  const punch=(type:string)=>{
+    if(!user||user.role!=='employee') return
+    setBlocked('');setChecking(true)
+    const doReg=async()=>{
+      const id=user.id,st=gs(id),ts=new Date(),td=TODAY()
+      let s:EmpState={...st,log:[...st.log,{type,time:ts}]}
+      if(type==='entrada'){s.status=STATUS.IN;s.workStart=ts}
+      else if(type==='saida'){const w=st.workStart?ts.getTime()-st.workStart.getTime():0,n=st.workStart?calcNightMs(st.workStart.getTime(),ts.getTime()):0;s.totalWork=(st.totalWork||0)+w;s.dailyWork={...(st.dailyWork||{})};s.dailyWork[td]=(s.dailyWork[td]||0)+w;s.dailyNight={...(st.dailyNight||{})};s.dailyNight[td]=(s.dailyNight[td]||0)+n;s.status=STATUS.OUT;s.workStart=null;if(!s.days.includes(td))s.days=[...s.days,td]}
+      else if(type==='inicio_pausa'){const w=st.workStart?ts.getTime()-st.workStart.getTime():0,n=st.workStart?calcNightMs(st.workStart.getTime(),ts.getTime()):0;s.totalWork=(st.totalWork||0)+w;s.dailyWork={...(st.dailyWork||{})};s.dailyWork[td]=(s.dailyWork[td]||0)+w;s.dailyNight={...(st.dailyNight||{})};s.dailyNight[td]=(s.dailyNight[td]||0)+n;s.status=STATUS.BREAK;s.workStart=null;s.breakStart=ts}
+      else if(type==='fim_pausa'){s.totalBreak=(st.totalBreak||0)+(st.breakStart?ts.getTime()-st.breakStart.getTime():0);s.status=STATUS.IN;s.breakStart=null;s.workStart=ts}
+      await setDoc(doc(db,rc,String(id)),{...s,log:s.log.map(e=>({type:e.type,time:e.time.toISOString()})),workStart:s.workStart?s.workStart.toISOString():null,breakStart:s.breakStart?s.breakStart.toISOString():null})
+      setChecking(false)
     }
-    if (!geofence) { doRegister(); return }
+    if(!geo){doReg();return}
     navigator.geolocation.getCurrentPosition(
-      pos => {
-        const dist = calcDistance(pos.coords.latitude,pos.coords.longitude,geofence.lat,geofence.lng)
-        if (dist<=geofence.radius) { doRegister() }
-        else { setPunchChecking(false); setPunchBlocked(`📍 Você está a ${Math.round(dist)}m. Máximo: ${geofence.radius}m.`); setTimeout(()=>setPunchBlocked(''),6000) }
-      },
-      () => { setPunchChecking(false); setPunchBlocked('⚠️ Não foi possível obter sua localização.'); setTimeout(()=>setPunchBlocked(''),6000) },
-      { enableHighAccuracy:true, timeout:8000 }
+      pos=>{const d=dist(pos.coords.latitude,pos.coords.longitude,geo.lat,geo.lng);if(d<=geo.radius)doReg();else{setChecking(false);setBlocked(`📍 Você está a ${Math.round(d)}m. Máximo: ${geo.radius}m.`);setTimeout(()=>setBlocked(''),6000)}},
+      ()=>{setChecking(false);setBlocked('⚠️ Localização não disponível.');setTimeout(()=>setBlocked(''),6000)},
+      {enableHighAccuracy:true,timeout:8000}
     )
   }
 
-  // monthFilter: 'YYYY-MM' para filtrar por mês específico, ou undefined para mês atual ao vivo
-  const calcPayment = (emp:Employee, state:EmpState, liveWork:number, monthFilter?: string) => {
-    const hourValue = emp.payType==='hour' ? emp.payValue : emp.payValue/emp.hoursPerDay
-    const journeyMs = emp.hoursPerDay * 3600000
-
-    const allDays = { ...(state.dailyWork||{}) }
-    if (!monthFilter && state.status!==STATUS.OUT) {
-      const todayStr = TODAY()
-      allDays[todayStr] = (allDays[todayStr]||0) + (state.workStart ? now.getTime()-state.workStart.getTime() : 0)
-    }
-    const filteredDays = monthFilter
-      ? Object.fromEntries(Object.entries(allDays).filter(([d]) => d.startsWith(monthFilter)))
-      : allDays
-    const filteredOff = monthFilter
-      ? Object.fromEntries(Object.entries(state.dailyOff||{}).filter(([d]) => d.startsWith(monthFilter)))
-      : (state.dailyOff||{})
-    const filteredNight = monthFilter
-      ? Object.fromEntries(Object.entries(state.dailyNight||{}).filter(([d]) => d.startsWith(monthFilter)))
-      : (state.dailyNight||{})
-
-    let regularMs = 0, overtimeByRate: Record<number,number> = {}
-    Object.entries(filteredDays).forEach(([date, ms]) => {
-      const reg = Math.min(ms as number, journeyMs)
-      const ot = Math.max(0, (ms as number)-journeyMs)
-      regularMs += reg
-      if (ot > 0) {
-        const rate = (state.dailyOvertimeRate||{})[date] ?? (emp.overtimeRate||50)
-        overtimeByRate[rate] = (overtimeByRate[rate]||0) + ot
-      }
-    })
-    const totalMs = monthFilter
-      ? Object.values(filteredDays).reduce((a,b) => a+(b as number), 0)
-      : liveWork
-    const totalBreakMs = monthFilter ? 0 : (state.totalBreak||0)+(state.breakStart?now.getTime()-state.breakStart.getTime():0)
-    const daysWorked = Object.keys(filteredDays).filter(d=>(filteredDays[d]||0)>0).length + (!monthFilter && state.status!==STATUS.OUT ? 1 : 0)
-    const paidOffDays = Object.values(filteredOff).filter(v=>v==='paid').length
-    const totalPaidDays = daysWorked + paidOffDays
-    const overtimeMs = Object.values(overtimeByRate).reduce((a,b)=>a+b,0)
-
-    let regularValue = 0, overtimeValue = 0
-    if (emp.payType==='hour') {
-      regularValue = (regularMs/3600000)*hourValue
-    } else {
-      regularValue = totalPaidDays * emp.payValue
-    }
-    Object.entries(overtimeByRate).forEach(([rate, ms]) => {
-      overtimeValue += (ms as number)/3600000 * hourValue * (1+Number(rate)/100)
-    })
-    const nightMs = Object.values(filteredNight).reduce((a:number,b)=>a+(b as number),0)
-    const nightBonus = (nightMs/3600000)*hourValue*0.20
-    const grossValue = regularValue + overtimeValue + nightBonus
-    const manualDiscountTotal = (emp.discounts||[]).reduce((s,d)=>s+d.value,0)
-    const totalDeductions = manualDiscountTotal
-    const gratificationsTotal = (emp.gratifications||[]).reduce((s,g)=>s+g.value,0)
-    const net = Math.max(0, grossValue-totalDeductions) + gratificationsTotal
-    return { totalMs, daysWorked, grossValue, autoDeductions:0, manualDiscountTotal, totalDeductions, net, breakMs:totalBreakMs, overtimeMs, overtimeByRate, nightMs, nightBonus, gratificationsTotal, regularValue, overtimeValue }
+  const calcPay=(emp:Employee,st:EmpState,lw:number,mf?:string)=>{
+    const hv=emp.payType==='hour'?emp.payValue:emp.payValue/emp.hoursPerDay, jMs=emp.hoursPerDay*3600000
+    const allD={...(st.dailyWork||{})};if(!mf&&st.status!==STATUS.OUT){const t=TODAY();allD[t]=(allD[t]||0)+(st.workStart?now.getTime()-st.workStart.getTime():0)}
+    const fd=mf?Object.fromEntries(Object.entries(allD).filter(([d])=>d.startsWith(mf))):allD
+    const fo=mf?Object.fromEntries(Object.entries(st.dailyOff||{}).filter(([d])=>d.startsWith(mf))):(st.dailyOff||{})
+    const fn=mf?Object.fromEntries(Object.entries(st.dailyNight||{}).filter(([d])=>d.startsWith(mf))):(st.dailyNight||{})
+    let regMs=0,otR:Record<number,number>={}
+    Object.entries(fd).forEach(([date,ms])=>{const reg=Math.min(ms as number,jMs),ot=Math.max(0,(ms as number)-jMs);regMs+=reg;if(ot>0){const r=(st.dailyOvertimeRate||{})[date]??(emp.overtimeRate||50);otR[r]=(otR[r]||0)+ot}})
+    const totalMs=mf?Object.values(fd).reduce((a,b)=>a+(b as number),0):lw
+    const brkMs=mf?0:(st.totalBreak||0)+(st.breakStart?now.getTime()-st.breakStart.getTime():0)
+    const dw=Object.keys(fd).filter(d=>(fd[d]||0)>0).length+(!mf&&st.status!==STATUS.OUT?1:0)
+    const po=Object.values(fo).filter(v=>v==='paid').length
+    const otMs=Object.values(otR).reduce((a,b)=>a+b,0)
+    let rv=0,ov=0
+    if(emp.payType==='hour')rv=(regMs/3600000)*hv;else rv=(dw+po)*emp.payValue
+    Object.entries(otR).forEach(([r,ms])=>{ov+=(ms as number)/3600000*hv*(1+Number(r)/100)})
+    const nMs=Object.values(fn).reduce((a:number,b)=>a+(b as number),0),nb=(nMs/3600000)*hv*0.20
+    const gross=rv+ov+nb,disc=(emp.discounts||[]).reduce((s,d)=>s+d.value,0),grat=(emp.gratifications||[]).reduce((s,g)=>s+g.value,0)
+    return{totalMs,daysWorked:dw,grossValue:gross,autoDeductions:0,manualDiscountTotal:disc,totalDeductions:disc,net:Math.max(0,gross-disc)+grat,breakMs:brkMs,overtimeMs:otMs,overtimeByRate:otR,nightMs:nMs,nightBonus:nb,gratificationsTotal:grat,regularValue:rv,overtimeValue:ov}
   }
 
-  const validateForm = () => {
-    const e: Record<string,string> = {}
-    if (!form.name.trim()) e.name='Nome obrigatório'
-    if (!form.role.trim()) e.role='Cargo obrigatório'
-    if (!form.username.trim()) e.username='Usuário obrigatório'
-    else if (employees.find(emp=>emp.username===form.username&&emp.id!==editingEmp?.id)) e.username='Usuário já cadastrado'
-    if (!editingEmp&&!form.password.trim()) e.password='Senha obrigatória'
-    if (!form.payValue||isNaN(Number(form.payValue))||Number(form.payValue)<=0) e.payValue='Valor obrigatório'
-    return e
+  const valForm=()=>{const e:Record<string,string>={};if(!form.name.trim())e.name='Obrigatório';if(!form.role.trim())e.role='Obrigatório';if(!form.username.trim())e.username='Obrigatório';else if(employees.find(e=>e.username===form.username&&e.id!==editEmp?.id))e.username='Usuário já existe';if(!editEmp&&!form.password.trim())e.password='Obrigatório';if(!form.payValue||isNaN(Number(form.payValue))||Number(form.payValue)<=0)e.payValue='Valor inválido';return e}
+
+  const saveEmp=async()=>{
+    const e=valForm();if(Object.keys(e).length){setFErr(e);return}
+    const ini=form.name.split(' ').map((w:string)=>w[0]).join('').slice(0,2).toUpperCase()
+    const data={name:form.name,role:form.role,username:form.username,avatar:ini,payType:form.payType as 'day'|'hour',payValue:Number(form.payValue),hoursPerDay:Number(form.hoursPerDay)||8,overtimeRate:Number(form.overtimeRate) as 50|70|100,cpf:form.cpf||'',admission:form.admission||'',fgts:form.fgts||false,companySlug:slug,...(form.password?{password:form.password}:{})}
+    if(editEmp){await setDoc(doc(db,ec,String(editEmp.id)),{...editEmp,...data});setOk('Funcionário atualizado!')}
+    else{const id=Date.now();await setDoc(doc(db,ec,String(id)),{id,password:form.password,discounts:[],gratifications:[],...data});setOk('Funcionário cadastrado!')}
+    setTimeout(()=>setOk(''),3000)
+    setForm({name:'',role:'',username:'',password:'',payType:'day',payValue:'',hoursPerDay:'8',overtimeRate:'50',cpf:'',admission:'',fgts:false});setFErr({});setEditEmp(null);setAv('list')
+  }
+  const delEmp=async(id:number)=>{await deleteDoc(doc(db,ec,String(id)));await deleteDoc(doc(db,rc,String(id)))}
+  const startEdit=(emp:Employee)=>{setEditEmp(emp);setForm({name:emp.name,role:emp.role,username:emp.username,password:'',payType:emp.payType,payValue:String(emp.payValue),hoursPerDay:String(emp.hoursPerDay),overtimeRate:String(emp.overtimeRate||50),cpf:emp.cpf||'',admission:emp.admission||'',fgts:emp.fgts||false});setFErr({});setAv('edit')}
+
+  const addDisc=async(eid:number)=>{setDerr('');if(!dform.value||isNaN(Number(dform.value))||Number(dform.value)<=0){setDerr('Valor inválido');return}if(!dform.reason.trim()){setDerr('Informe o motivo');return};const emp=employees.find(e=>e.id===eid);if(!emp)return;const d:Discount={id:Date.now(),value:Number(dform.value),reason:dform.reason.trim(),date:fmtDs(new Date())};await setDoc(doc(db,ec,String(eid)),{...emp,discounts:[...(emp.discounts||[]),d]});setDform({value:'',reason:''});setDtgt(null)}
+  const remDisc=async(eid:number,did:number)=>{const emp=employees.find(e=>e.id===eid);if(!emp)return;await setDoc(doc(db,ec,String(eid)),{...emp,discounts:emp.discounts.filter(d=>d.id!==did)})}
+  const addGrat=async(eid:number)=>{setGerr('');if(!gform.value||isNaN(Number(gform.value))||Number(gform.value)<=0){setGerr('Valor inválido');return}if(!gform.reason.trim()){setGerr('Informe o motivo');return};const emp=employees.find(e=>e.id===eid);if(!emp)return;const g:Discount={id:Date.now(),value:Number(gform.value),reason:gform.reason.trim(),date:fmtDs(new Date())};await setDoc(doc(db,ec,String(eid)),{...emp,gratifications:[...(emp.gratifications||[]),g]});setGform({value:'',reason:''});setGtgt(null);setAddG(false)}
+  const remGrat=async(eid:number,gid:number)=>{const emp=employees.find(e=>e.id===eid);if(!emp)return;await setDoc(doc(db,ec,String(eid)),{...emp,gratifications:(emp.gratifications||[]).filter(g=>g.id!==gid)})}
+
+  const markOff=async(eid:number,date:string,type:'paid'|'unpaid'|null)=>{const st=gs(eid);const off={...(st.dailyOff||{})};if(type===null)delete off[date];else off[date]=type;await setDoc(doc(db,rc,String(eid)),{...st,dailyOff:off,log:st.log.map(e=>({type:e.type,time:e.time.toISOString()})),workStart:st.workStart?st.workStart.toISOString():null,breakStart:st.breakStart?st.breakStart.toISOString():null})}
+
+  const saveHours=async(eid:number,date:string,h:number,m:number,otRate?:number)=>{const ms=(h*60+m)*60000,st=gs(eid),old=(st.dailyWork||{})[date]||0,diff=ms-old;const nDW={...(st.dailyWork||{}),[date]:ms},nTW=Math.max(0,(st.totalWork||0)+diff);let nd=[...(st.days||[])];if(ms>0&&!nd.includes(date))nd=[...nd,date];if(ms===0)nd=nd.filter(d=>d!==date);const nOT={...(st.dailyOvertimeRate||{})};if(otRate!==undefined)nOT[date]=otRate;await setDoc(doc(db,rc,String(eid)),{...st,dailyWork:nDW,totalWork:nTW,days:nd,dailyOvertimeRate:nOT,log:st.log.map(e=>({type:e.type,time:e.time.toISOString()})),workStart:st.workStart?st.workStart.toISOString():null,breakStart:st.breakStart?st.breakStart.toISOString():null});setEditDay(null);setEditH('');setEditMin('')}
+
+  const genHolerite=async(emp:Employee,_st:EmpState,pay:ReturnType<typeof calcPay>,hm:string)=>{
+    if(!(window as any).jspdf){await new Promise<void>((res,rej)=>{const s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';s.onload=()=>res();s.onerror=()=>rej();document.head.appendChild(s)})}
+    const{jsPDF}=(window as any).jspdf;const jd=new jsPDF({orientation:'portrait',unit:'mm',format:'a4'});const W=210,mg=16;let y=0;const c2=W/2+2,rH=7
+    const rect=(x:number,yy:number,w:number,h:number,fill?:string)=>{if(fill){jd.setFillColor(fill);jd.rect(x,yy,w,h,'F')}}
+    const txt=(t:string,x:number,yy:number,o?:{size?:number;bold?:boolean;color?:string;align?:'left'|'right'|'center'})=>{jd.setFontSize(o?.size||9);jd.setFont('helvetica',o?.bold?'bold':'normal');if(o?.color){const[r,g,b]=o.color.match(/\w\w/g)!.map(h=>parseInt(h,16));jd.setTextColor(r,g,b)}else jd.setTextColor(30,30,30);jd.text(t,x,yy,{align:o?.align||'left'})}
+    const ln=(x1:number,yy:number,x2:number,color='#E8EDF5')=>{const[r,g,b]=color.match(/\w\w/g)!.map(h=>parseInt(h,16));jd.setDrawColor(r,g,b);jd.setLineWidth(0.3);jd.line(x1,yy,x2,yy)}
+    rect(0,0,W,36,'#5B4CF5');y=10
+    if(co?.logo){try{jd.addImage(co.logo,'AUTO',mg,4,28,28,'','FAST')}catch(_){};const tx=mg+32;txt(co?.name||'PontoApp',tx,y+2,{size:14,bold:true,color:'#fff'});if(co?.cnpj)txt(`CNPJ: ${co.cnpj}`,tx,y+8,{size:8,color:'#C7D2FE'});if(co?.address)txt(co.address,tx,y+14,{size:7,color:'#C7D2FE'})}
+    else{txt(co?.name||'PontoApp',mg,y+4,{size:16,bold:true,color:'#fff'});if(co?.cnpj)txt(`CNPJ: ${co.cnpj}`,mg,y+11,{size:8,color:'#C7D2FE'});if(co?.address)txt(co.address,mg,y+17,{size:7,color:'#C7D2FE'})}
+    txt('HOLERITE',W-mg,y+2,{size:13,bold:true,color:'#C7D2FE',align:'right'})
+    const[hY,hM]=hm.split('-').map(Number)
+    txt(new Date(hY,hM-1,1).toLocaleDateString('pt-BR',{month:'long',year:'numeric'}),W-mg,y+9,{size:8,color:'#A5B4FC',align:'right'})
+    txt(`Gerado: ${new Date().toLocaleString('pt-BR')}`,W-mg,y+15,{size:7,color:'#818CF8',align:'right'})
+    y=42;rect(mg,y,W-mg*2,6,'#F7F8FC');txt('DADOS DO FUNCIONÁRIO',mg+2,y+4.5,{size:8,bold:true,color:'#475569'});y+=8
+    const er=[['Nome',emp.name,'Cargo',emp.role],['CPF',emp.cpf||'—','Admissão',emp.admission?new Date(emp.admission+'T12:00:00').toLocaleDateString('pt-BR'):'—'],['Pagamento',emp.payType==='hour'?'Por Hora':'Por Dia','Salário Base',fmt(emp.payValue)+(emp.payType==='hour'?'/h':'/dia')]]
+    er.forEach((row,i)=>{if(i%2===0)rect(mg,y,W-mg*2,rH,'#F7F8FC');txt(row[0],mg+2,y+5,{size:7.5,color:'#64748b'});txt(row[1],mg+30,y+5,{size:8,bold:true});txt(row[2],c2+2,y+5,{size:7.5,color:'#64748b'});txt(row[3],c2+30,y+5,{size:8,bold:true});ln(mg,y+rH,W-mg);y+=rH})
+    y+=6;rect(mg,y,W-mg*2,6,'#ECFDF5');txt('PROVENTOS',mg+2,y+4.5,{size:8,bold:true,color:'#059669'});y+=8
+    const earn:[string,string,string][]=[['Horas/Dias Trabalhados',`${fmtH(pay.totalMs)} | ${pay.daysWorked} dia(s)`,fmt(pay.regularValue)]]
+    Object.entries(pay.overtimeByRate).sort(([a],[b])=>Number(a)-Number(b)).forEach(([r,ms])=>{const hv=emp.payType==='hour'?emp.payValue:emp.payValue/emp.hoursPerDay;earn.push([`Hora Extra +${r}%`,fmtH(ms as number),fmt((ms as number)/3600000*hv*(1+Number(r)/100))])})
+    if(pay.nightMs>0)earn.push(['Adicional Noturno (20%)',fmtH(pay.nightMs),fmt(pay.nightBonus)]);(emp.gratifications||[]).forEach(g=>earn.push([`Gratificação: ${g.reason}`,g.date,fmt(g.value)]))
+    earn.forEach((row,i)=>{if(i%2===0)rect(mg,y,W-mg*2,rH,'#F7F8FC');txt(row[0],mg+2,y+5,{size:8});txt(row[1],W/2,y+5,{size:8,color:'#475569',align:'center'});txt(row[2],W-mg-2,y+5,{size:8,bold:true,color:'#059669',align:'right'});ln(mg,y+rH,W-mg);y+=rH})
+    rect(mg,y,W-mg*2,7,'#DCFCE7');txt('TOTAL PROVENTOS',mg+2,y+5,{size:8.5,bold:true,color:'#15803d'});txt(fmt(pay.grossValue),W-mg-2,y+5,{size:9,bold:true,color:'#15803d',align:'right'});y+=10
+    rect(mg,y,W-mg*2,6,'#FFF1F2');txt('DESCONTOS',mg+2,y+4.5,{size:8,bold:true,color:'#E11D48'});y+=8
+    const ded:[string,string,string][]=[]; (emp.discounts||[]).forEach(d=>ded.push([d.reason,d.date,fmt(d.value)]));const fgtsV=emp.fgts?pay.grossValue*0.08:0;if(emp.fgts)ded.push(['FGTS (8%)','—',fmt(fgtsV)])
+    if(ded.length===0){txt('Nenhum desconto.',mg+2,y+5,{size:8,color:'#94a3b8'});y+=rH}else{ded.forEach((row,i)=>{if(i%2===0)rect(mg,y,W-mg*2,rH,'#FFF5F5');txt(row[0],mg+2,y+5,{size:8});txt(row[1],W/2,y+5,{size:8,color:'#475569',align:'center'});txt(`- ${row[2]}`,W-mg-2,y+5,{size:8,bold:true,color:'#E11D48',align:'right'});ln(mg,y+rH,W-mg);y+=rH})}
+    rect(mg,y,W-mg*2,7,'#FFE4E6');txt('TOTAL DESCONTOS',mg+2,y+5,{size:8.5,bold:true,color:'#E11D48'});txt(`- ${fmt(pay.totalDeductions+fgtsV)}`,W-mg-2,y+5,{size:9,bold:true,color:'#E11D48',align:'right'});y+=12
+    rect(mg,y,W-mg*2,12,'#5B4CF5');txt('VALOR LÍQUIDO A RECEBER',mg+4,y+8,{size:10,bold:true,color:'#fff'});txt(fmt(pay.net-fgtsV),W-mg-4,y+8,{size:13,bold:true,color:'#ECFDF5',align:'right'});y+=16
+    ln(mg,y+14,mg+70);ln(W-mg-70,y+14,W-mg);txt('Assinatura do Empregador',mg+35,y+18,{size:7,color:'#94a3b8',align:'center'});txt('Assinatura do Funcionário',W-mg-35,y+18,{size:7,color:'#94a3b8',align:'center'})
+    y+=24;ln(mg,y,W-mg);txt('Documento gerado automaticamente pelo PontoApp.',W/2,y+4,{size:6.5,color:'#94a3b8',align:'center'})
+    jd.save(`Holerite_${emp.name.replace(/\s+/g,'_')}_${hm}.pdf`)
   }
 
-  const saveEmployee = async () => {
-    const e = validateForm(); if (Object.keys(e).length) { setFormErrors(e); return }
-    const av = form.name.split(' ').map((w:string)=>w[0]).join('').slice(0,2).toUpperCase()
-    const data = {
-      name:form.name, role:form.role, username:form.username, avatar:av,
-      payType:form.payType as 'day'|'hour', payValue:Number(form.payValue),
-      hoursPerDay:Number(form.hoursPerDay)||8, overtimeRate:Number(form.overtimeRate) as 50|70|100,
-      cpf:form.cpf||'', admission:form.admission||'', fgts:form.fgts||false,
-      companySlug: slug,
-      ...(form.password?{password:form.password}:{})
-    }
-    if (editingEmp) {
-      await setDoc(doc(db, empCol, String(editingEmp.id)), {...editingEmp,...data})
-      setSuccessMsg('Funcionário atualizado!')
-    } else {
-      const id = Date.now()
-      await setDoc(doc(db, empCol, String(id)), {id, password:form.password, discounts:[], gratifications:[], ...data})
-      setSuccessMsg('Funcionário cadastrado!')
-    }
-    setTimeout(()=>setSuccessMsg(''),3000)
-    setForm({ name:'', role:'', username:'', password:'', payType:'day', payValue:'', hoursPerDay:'8', overtimeRate:'50', cpf:'', admission:'', fgts:false })
-    setFormErrors({}); setEditingEmp(null); setAdminView('list')
+  // Live
+  const est=user?.role==='employee'?gs(user.id):null
+  const lw=est?(est.totalWork||0)+(est.workStart?now.getTime()-est.workStart.getTime():0):0
+  const lb=est?(est.totalBreak||0)+(est.breakStart?now.getTime()-est.breakStart.getTime():0):0
+  const myEmp=user?.role==='employee'?employees.find(e=>e.id===user.id):null
+  const myPay=myEmp&&est?calcPay(myEmp,est,lw):null
+  const td=TODAY()
+  const tdWork=est?((est.dailyWork||{})[td]||0)+(est.workStart?now.getTime()-est.workStart.getTime():0):0
+
+  const handleLogin=()=>{
+    setLe('')
+    if(meta&&lu===meta.adminUsername&&lp===meta.adminPassword){setUser({id:0,name:'Administrador',username:meta.adminUsername,avatar:'AD',role:'admin',payType:'day',payValue:0,hoursPerDay:8,discounts:[],companySlug:slug});setView('list');return}
+    const emp=employees.find(e=>e.username===lu&&e.password===lp)
+    if(emp){setUser({...emp,role:'employee'});setView('clock');return}
+    setLe('Usuário ou senha incorretos.')
   }
+  const logout=()=>{setUser(null);setLu('');setLp('');setLe('')}
 
-  const deleteEmployee = async (id:number) => {
-    await deleteDoc(doc(db, empCol, String(id)))
-    await deleteDoc(doc(db, recCol, String(id)))
-  }
-
-  const startEdit = (emp:Employee) => {
-    setEditingEmp(emp)
-    setForm({ name:emp.name, role:emp.role, username:emp.username, password:'', payType:emp.payType, payValue:String(emp.payValue), hoursPerDay:String(emp.hoursPerDay), overtimeRate:String(emp.overtimeRate||50), cpf:emp.cpf||'', admission:emp.admission||'', fgts:emp.fgts||false })
-    setFormErrors({}); setAdminView('edit')
-  }
-
-  const addDiscount = async (empId:number) => {
-    setDiscountError('')
-    if (!discountForm.value||isNaN(Number(discountForm.value))||Number(discountForm.value)<=0) { setDiscountError('Valor inválido'); return }
-    if (!discountForm.reason.trim()) { setDiscountError('Informe o motivo'); return }
-    const emp = employees.find(e=>e.id===empId); if (!emp) return
-    const d: Discount = { id:Date.now(), value:Number(discountForm.value), reason:discountForm.reason.trim(), date:formatDateShort(new Date()) }
-    await setDoc(doc(db, empCol, String(empId)), {...emp, discounts:[...(emp.discounts||[]),d]})
-    setDiscountForm({ value:'', reason:'' }); setDiscountTarget(null)
-  }
-
-  const removeDiscount = async (empId:number, discountId:number) => {
-    const emp = employees.find(e=>e.id===empId); if (!emp) return
-    await setDoc(doc(db, empCol, String(empId)), {...emp, discounts:emp.discounts.filter(d=>d.id!==discountId)})
-  }
-
-  const addGratification = async (empId:number) => {
-    setGratifError('')
-    if (!gratifForm.value||isNaN(Number(gratifForm.value))||Number(gratifForm.value)<=0) { setGratifError('Valor inválido'); return }
-    if (!gratifForm.reason.trim()) { setGratifError('Informe o motivo'); return }
-    const emp = employees.find(e=>e.id===empId); if (!emp) return
-    const g: Discount = { id:Date.now(), value:Number(gratifForm.value), reason:gratifForm.reason.trim(), date:formatDateShort(new Date()) }
-    await setDoc(doc(db, empCol, String(empId)), {...emp, gratifications:[...(emp.gratifications||[]),g]})
-    setGratifForm({ value:'', reason:'' }); setGratifTarget(null); setIsAddingGratif(false)
-  }
-
-  const removeGratification = async (empId:number, gratifId:number) => {
-    const emp = employees.find(e=>e.id===empId); if (!emp) return
-    await setDoc(doc(db, empCol, String(empId)), {...emp, gratifications:(emp.gratifications||[]).filter(g=>g.id!==gratifId)})
-  }
-
-  const markDayOff = async (empId:number, date:string, type:'paid'|'unpaid'|null) => {
-    const state = getState(empId)
-    const dailyOff = {...(state.dailyOff||{})}
-    if (type===null) delete dailyOff[date]; else dailyOff[date]=type
-    await setDoc(doc(db, recCol, String(empId)), {
-      ...state, dailyOff,
-      log:state.log.map(e=>({type:e.type,time:e.time.toISOString()})),
-      workStart:state.workStart?state.workStart.toISOString():null,
-      breakStart:state.breakStart?state.breakStart.toISOString():null,
-    })
-  }
-
-  const saveEditedHours = async (empId:number, date:string, h:number, m:number, otRate?:number) => {
-    const ms = (h*60+m)*60000
-    const state = getState(empId)
-    const oldMs = (state.dailyWork||{})[date]||0
-    const diff = ms-oldMs
-    const newDailyWork = {...(state.dailyWork||{}), [date]:ms}
-    const newTotalWork = Math.max(0,(state.totalWork||0)+diff)
-    let newDays = [...(state.days||[])]
-    if (ms>0&&!newDays.includes(date)) newDays=[...newDays,date]
-    if (ms===0) newDays=newDays.filter(d=>d!==date)
-    const newOvertimeRate = {...(state.dailyOvertimeRate||{})}
-    if (otRate!==undefined) newOvertimeRate[date]=otRate
-    await setDoc(doc(db, recCol, String(empId)), {
-      ...state, dailyWork:newDailyWork, totalWork:newTotalWork, days:newDays, dailyOvertimeRate:newOvertimeRate,
-      log:state.log.map(e=>({type:e.type,time:e.time.toISOString()})),
-      workStart:state.workStart?state.workStart.toISOString():null,
-      breakStart:state.breakStart?state.breakStart.toISOString():null,
-    })
-    setEditingDay(null); setEditHours(''); setEditMinutes('')
-  }
-
-  const generateHolerite = async (emp:Employee, _state:EmpState, payment:ReturnType<typeof calcPayment>, holeriteMonth: string) => {
-    if (!(window as any).jspdf) {
-      await new Promise<void>((resolve,reject) => {
-        const s = document.createElement('script')
-        s.src='https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'
-        s.onload=()=>resolve(); s.onerror=()=>reject()
-        document.head.appendChild(s)
-      })
-    }
-    const { jsPDF } = (window as any).jspdf
-    const jdoc = new jsPDF({ orientation:'portrait', unit:'mm', format:'a4' })
-    const W=210, margin=16
-    let y=0
-    const col2 = W/2+2, rowH=7
-    const rect = (x:number,yy:number,w:number,h:number,fill?:string) => {
-      if (fill) { jdoc.setFillColor(fill); jdoc.rect(x,yy,w,h,'F') }
-    }
-    const txt = (t:string,x:number,yy:number,opts?:{size?:number;bold?:boolean;color?:string;align?:'left'|'right'|'center'}) => {
-      jdoc.setFontSize(opts?.size||9)
-      jdoc.setFont('helvetica',opts?.bold?'bold':'normal')
-      if (opts?.color) { const [r,g,b]=opts.color.match(/\w\w/g)!.map(h=>parseInt(h,16)); jdoc.setTextColor(r,g,b) } else jdoc.setTextColor(30,30,30)
-      jdoc.text(t,x,yy,{align:opts?.align||'left'})
-    }
-    const ln = (x1:number,yy:number,x2:number,color='#e2e8f0') => {
-      const [r,g,b]=color.match(/\w\w/g)!.map(h=>parseInt(h,16))
-      jdoc.setDrawColor(r,g,b); jdoc.setLineWidth(0.3); jdoc.line(x1,yy,x2,yy)
-    }
-    rect(0,0,W,36,'#1e293b'); y=10
-    if (company?.logo) {
-      try { jdoc.addImage(company.logo,'AUTO',margin,4,28,28,'','FAST') } catch(_) {}
-      const tx=margin+32
-      txt(company?.name||'PontoApp',tx,y+2,{size:14,bold:true,color:'#f1f5f9'})
-      if (company?.cnpj) txt(`CNPJ: ${company.cnpj}`,tx,y+8,{size:8,color:'#94a3b8'})
-      if (company?.address) txt(company.address,tx,y+14,{size:7,color:'#94a3b8'})
-      if (company?.phone||company?.email) txt([company.phone,company.email].filter(Boolean).join('  |  '),tx,y+20,{size:7,color:'#94a3b8'})
-    } else {
-      txt(company?.name||'PontoApp',margin,y+4,{size:16,bold:true,color:'#f1f5f9'})
-      if (company?.cnpj) txt(`CNPJ: ${company.cnpj}`,margin,y+11,{size:8,color:'#94a3b8'})
-      if (company?.address) txt(company.address,margin,y+17,{size:7,color:'#94a3b8'})
-    }
-    txt('HOLERITE',W-margin,y+2,{size:13,bold:true,color:'#6366f1',align:'right'})
-    const [hYear,hMon]=holeriteMonth.split('-').map(Number)
-    const holeriteDate = new Date(hYear,hMon-1,1).toLocaleDateString('pt-BR',{month:'long',year:'numeric'})
-    txt(holeriteDate,W-margin,y+9,{size:8,color:'#94a3b8',align:'right'})
-    txt(`Gerado: ${new Date().toLocaleString('pt-BR')}`,W-margin,y+15,{size:7,color:'#64748b',align:'right'})
-    y=42
-    rect(margin,y,W-margin*2,6,'#f8fafc')
-    txt('DADOS DO FUNCIONÁRIO',margin+2,y+4.5,{size:8,bold:true,color:'#475569'})
-    y+=8
-    const empRows=[
-      ['Nome',emp.name,'Cargo',emp.role],
-      ['CPF',emp.cpf||'—','Admissão',emp.admission?new Date(emp.admission+'T12:00:00').toLocaleDateString('pt-BR'):'—'],
-      ['Pagamento',emp.payType==='hour'?'Por Hora':'Por Dia','Salário Base',fmt(emp.payValue)+(emp.payType==='hour'?'/h':'/dia')],
-    ]
-    empRows.forEach((row,i)=>{
-      if(i%2===0) rect(margin,y,W-margin*2,rowH,'#f8fafc')
-      txt(row[0],margin+2,y+5,{size:7.5,color:'#64748b'}); txt(row[1],margin+30,y+5,{size:8,bold:true})
-      txt(row[2],col2+2,y+5,{size:7.5,color:'#64748b'}); txt(row[3],col2+30,y+5,{size:8,bold:true})
-      ln(margin,y+rowH,W-margin); y+=rowH
-    })
-    y+=6
-    rect(margin,y,W-margin*2,6,'#f0fdf4')
-    txt('PROVENTOS',margin+2,y+4.5,{size:8,bold:true,color:'#16a34a'})
-    y+=8
-    const earnings: [string,string,string][] = [
-      ['Horas/Dias Trabalhados',`${formatHours(payment.totalMs)} | ${payment.daysWorked} dia(s)`,fmt(payment.regularValue)],
-    ]
-    Object.entries(payment.overtimeByRate).sort(([a],[b])=>Number(a)-Number(b)).forEach(([rate,ms])=>{
-      const hv=emp.payType==='hour'?emp.payValue:emp.payValue/emp.hoursPerDay
-      earnings.push([`Hora Extra +${rate}%`,formatHours(ms as number),fmt((ms as number)/3600000*hv*(1+Number(rate)/100))])
-    })
-    if (payment.nightMs>0) earnings.push(['Adicional Noturno (20%)',formatHours(payment.nightMs),fmt(payment.nightBonus)])
-    ;(emp.gratifications||[]).forEach(g=>earnings.push([`Gratificação: ${g.reason}`,g.date,fmt(g.value)]))
-    earnings.forEach((row,i)=>{
-      if(i%2===0) rect(margin,y,W-margin*2,rowH,'#f8fafc')
-      txt(row[0],margin+2,y+5,{size:8}); txt(row[1],W/2,y+5,{size:8,color:'#475569',align:'center'})
-      txt(row[2],W-margin-2,y+5,{size:8,bold:true,color:'#16a34a',align:'right'})
-      ln(margin,y+rowH,W-margin); y+=rowH
-    })
-    rect(margin,y,W-margin*2,7,'#dcfce7')
-    txt('TOTAL PROVENTOS',margin+2,y+5,{size:8.5,bold:true,color:'#15803d'})
-    txt(fmt(payment.grossValue),W-margin-2,y+5,{size:9,bold:true,color:'#15803d',align:'right'})
-    y+=10
-    rect(margin,y,W-margin*2,6,'#fef2f2')
-    txt('DESCONTOS',margin+2,y+4.5,{size:8,bold:true,color:'#dc2626'})
-    y+=8
-    const deductions: [string,string,string][] = []
-    ;(emp.discounts||[]).forEach(d=>deductions.push([d.reason,d.date,fmt(d.value)]))
-    const fgtsVal = emp.fgts ? payment.grossValue*0.08 : 0
-    if (emp.fgts) deductions.push(['FGTS (8%)','—',fmt(fgtsVal)])
-    if (deductions.length===0) { txt('Nenhum desconto.',margin+2,y+5,{size:8,color:'#94a3b8'}); y+=rowH }
-    else {
-      deductions.forEach((row,i)=>{
-        if(i%2===0) rect(margin,y,W-margin*2,rowH,'#fff5f5')
-        txt(row[0],margin+2,y+5,{size:8}); txt(row[1],W/2,y+5,{size:8,color:'#475569',align:'center'})
-        txt(`- ${row[2]}`,W-margin-2,y+5,{size:8,bold:true,color:'#dc2626',align:'right'})
-        ln(margin,y+rowH,W-margin); y+=rowH
-      })
-    }
-    rect(margin,y,W-margin*2,7,'#fee2e2')
-    txt('TOTAL DESCONTOS',margin+2,y+5,{size:8.5,bold:true,color:'#dc2626'})
-    txt(`- ${fmt(payment.totalDeductions+fgtsVal)}`,W-margin-2,y+5,{size:9,bold:true,color:'#dc2626',align:'right'})
-    y+=12
-    rect(margin,y,W-margin*2,12,'#1e293b')
-    txt('VALOR LÍQUIDO A RECEBER',margin+4,y+8,{size:10,bold:true,color:'#f1f5f9'})
-    txt(fmt(payment.net-fgtsVal),W-margin-4,y+8,{size:13,bold:true,color:'#4ade80',align:'right'})
-    y+=16
-    ln(margin,y+14,margin+70); ln(W-margin-70,y+14,W-margin)
-    txt('Assinatura do Empregador',margin+35,y+18,{size:7,color:'#94a3b8',align:'center'})
-    txt('Assinatura do Funcionário',W-margin-35,y+18,{size:7,color:'#94a3b8',align:'center'})
-    y+=24; ln(margin,y,W-margin)
-    txt('Documento gerado automaticamente pelo PontoApp.',W/2,y+4,{size:6.5,color:'#94a3b8',align:'center'})
-    jdoc.save(`Holerite_${emp.name.replace(/\s+/g,'_')}_${holeriteMonth}.pdf`)
-  }
-
-  // Live values
-  const empState = loggedIn?.role==='employee' ? getState(loggedIn.id) : null
-  const liveWork = empState ? (empState.totalWork||0)+(empState.workStart?now.getTime()-empState.workStart.getTime():0) : 0
-  const liveBreak = empState ? (empState.totalBreak||0)+(empState.breakStart?now.getTime()-empState.breakStart.getTime():0) : 0
-  const myEmpData = loggedIn?.role==='employee' ? employees.find(e=>e.id===loggedIn.id) : null
-  const empPayment = myEmpData&&empState ? calcPayment(myEmpData,empState,liveWork) : null
-  const todayStr = TODAY()
-  const todayLiveWork = empState ? ((empState.dailyWork||{})[todayStr]||0)+(empState.workStart?now.getTime()-empState.workStart.getTime():0) : 0
-
-  const handleLogin = () => {
-    setLoginError('')
-    // Admin da empresa (credenciais vindas do Firestore)
-    if (companyMeta && loginUser===companyMeta.adminUsername && loginPass===companyMeta.adminPassword) {
-      setLoggedIn({id:0,name:'Administrador',username:companyMeta.adminUsername,avatar:'AD',role:'admin',payType:'day',payValue:0,hoursPerDay:8,discounts:[],companySlug:slug})
-      setView('list'); return
-    }
-    const emp = employees.find(e=>e.username===loginUser&&e.password===loginPass)
-    if (emp) { setLoggedIn({...emp,role:'employee'}); setView('clock'); return }
-    setLoginError('Usuário ou senha incorretos.')
-  }
-
-  const handleLogout = () => { setLoggedIn(null); setLoginUser(''); setLoginPass(''); setLoginError('') }
-
-  if (loading) return (
-    <div style={{ minHeight:'100vh', background:'#0f172a', display:'flex', alignItems:'center', justifyContent:'center', fontFamily:"'Courier New',monospace" }}>
-      <div style={{ textAlign:'center' }}>
-        <div style={{ fontSize:40, marginBottom:16 }}>⏱</div>
-        <div style={{ fontSize:14, color:'#475569', letterSpacing:2 }}>CARREGANDO...</div>
+  // ─── LOADING ───────────────────────────────────────────────────────────────
+  if(loading) return (
+    <div style={{minHeight:'100vh',background:C.bg,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div style={{textAlign:'center'}}>
+        <div style={{width:44,height:44,border:`3px solid ${C.border}`,borderTopColor:C.brand,borderRadius:'50%',margin:'0 auto 16px',animation:'spin .8s linear infinite'}}/>
+        <div style={{fontFamily:C.fb,fontSize:13,color:C.inkMid}}>Carregando…</div>
       </div>
     </div>
   )
 
-  return (
-    <div style={{ minHeight:'100vh', background:'#0f172a', display:'flex', justifyContent:'center', fontFamily:"'Courier New',monospace" }}>
-      <div style={{ width:'100%', maxWidth:420, minHeight:'100vh', background:'#0f172a', display:'flex', flexDirection:'column' }}>
-        <div style={{ height:3, background:'linear-gradient(90deg,#6366f1,#06b6d4,#22c55e)' }} />
-
-        {/* Header */}
-        <div style={{ padding:'16px 20px 12px', borderBottom:'1px solid #1e293b', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-          <div>
-            {/* Botão voltar para trocar de empresa */}
-            {!loggedIn && (
-              <button onClick={onLogout} style={{ background:'none', border:'none', cursor:'pointer', fontSize:10, color:'#475569', fontFamily:'inherit', marginBottom:2, padding:0 }}>← trocar empresa</button>
-            )}
-            <div style={{ fontSize:9, letterSpacing:4, color:'#475569', textTransform:'uppercase' }}>
-              {companyMeta?.name || slug}
-            </div>
-            <div style={{ fontSize:20, fontWeight:900, color:'#f1f5f9' }}>⏱ PontoApp</div>
-          </div>
-          <div style={{ textAlign:'right', background:'#1e293b', borderRadius:12, padding:'8px 14px', border:'1px solid #334155' }}>
-            <div style={{ fontSize:17, fontWeight:700, color:'#06b6d4' }}>{formatTime(now)}</div>
-            <div style={{ fontSize:9, color:'#64748b', textTransform:'capitalize' }}>{formatDate(now).split(',')[0]}</div>
-          </div>
-        </div>
-
-        <div style={{ flex:1, overflowY:'auto', padding:'16px 20px 24px' }}>
-
-          {/* LOGIN */}
-          {!loggedIn && (
-            <div style={{ display:'flex', flexDirection:'column', minHeight:'calc(100vh - 140px)', justifyContent:'center' }}>
-              <div style={{ textAlign:'center', marginBottom:36 }}>
-                {company?.logo ? (
-                  <img src={company.logo} alt="Logo" style={{ maxHeight:72, maxWidth:200, borderRadius:12, objectFit:'contain', marginBottom:16 }} />
-                ) : (
-                  <div style={{ display:'inline-flex', alignItems:'center', justifyContent:'center', width:72, height:72, borderRadius:20, background:'linear-gradient(135deg,#6366f1,#06b6d4)', boxShadow:'0 0 40px #6366f140', marginBottom:20, fontSize:32 }}>⏱</div>
-                )}
-                <div style={{ fontSize:26, fontWeight:900, color:'#f1f5f9' }}>{company?.name || companyMeta?.name || 'PontoApp'}</div>
-                <div style={{ fontSize:12, color:'#475569', marginTop:6, letterSpacing:2, textTransform:'uppercase' }}>Controle de Ponto Digital</div>
-              </div>
-              <div style={{ background:'linear-gradient(160deg,#1e293b,#162032)', borderRadius:20, padding:'28px 24px', border:'1px solid #334155', marginBottom:16 }}>
-                <Input label="Usuário" value={loginUser} onChange={setLoginUser} placeholder="Digite seu usuário" />
-                <Input label="Senha" type="password" value={loginPass} onChange={setLoginPass} placeholder="••••••••" error={loginError} />
-                <button onClick={handleLogin} style={{ width:'100%', padding:'14px', borderRadius:12, border:'none', cursor:'pointer', background:'linear-gradient(135deg,#6366f1,#4f46e5)', color:'#fff', fontSize:14, fontWeight:800, fontFamily:'inherit', marginTop:8 }}>
-                  ENTRAR NO SISTEMA →
-                </button>
-              </div>
-            </div>
+  // ─── LOGIN ─────────────────────────────────────────────────────────────────
+  if(!user) return (
+    <div style={{minHeight:'100vh',background:`linear-gradient(160deg, #EEF0FD 0%, #F7F8FC 50%, #ECFDF5 100%)`,display:'flex',justifyContent:'center',fontFamily:C.fb,position:'relative',overflow:'hidden'}}>
+      <div style={{position:'absolute',top:'8%',right:'-80px',width:320,height:320,borderRadius:'50%',background:`radial-gradient(circle,${C.brand}10,transparent 70%)`,pointerEvents:'none'}}/>
+      <div style={{position:'absolute',bottom:'5%',left:'-60px',width:280,height:280,borderRadius:'50%',background:`radial-gradient(circle,${C.emerald}08,transparent 70%)`,pointerEvents:'none'}}/>
+      <div style={{width:'100%',maxWidth:420,display:'flex',flexDirection:'column',justifyContent:'center',padding:'40px 24px',position:'relative',zIndex:1}}>
+        <button onClick={onLogout} style={{alignSelf:'flex-start',background:'none',border:'none',cursor:'pointer',fontFamily:C.fb,fontSize:12,color:C.inkLight,marginBottom:36}}>← Trocar empresa</button>
+        <div className="fade-up" style={{textAlign:'center',marginBottom:36}}>
+          {co?.logo?(
+            <img src={co.logo} alt="" style={{height:60,maxWidth:180,objectFit:'contain',borderRadius:12,marginBottom:16}}/>
+          ):(
+            <div style={{display:'inline-flex',alignItems:'center',justifyContent:'center',width:68,height:68,borderRadius:22,background:`linear-gradient(135deg,${C.brand},${C.brandDk})`,boxShadow:`0 8px 32px ${C.brandGlow}`,marginBottom:16,fontSize:30}}>⏱</div>
           )}
+          <div style={{fontFamily:C.ff,fontSize:28,fontWeight:900,color:C.ink,letterSpacing:'-0.025em',lineHeight:1.1}}>{co?.name||meta?.name||'PontoApp'}</div>
+          <div style={{fontFamily:C.fb,fontSize:13,color:C.inkMid,marginTop:6,fontStyle:'italic'}}>Registre seu ponto com segurança</div>
+        </div>
+        <Card style={{boxShadow:'0 12px 48px rgba(91,76,245,.12)',animation:'fadeUp .4s .1s both'}}>
+          <Input label="Usuário" value={lu} onChange={setLu} placeholder="seu.usuario"/>
+          <Input label="Senha" type="password" value={lp} onChange={setLp} error={le}/>
+          <button onClick={handleLogin} style={{width:'100%',padding:'15px',borderRadius:12,border:'none',background:`linear-gradient(135deg,${C.brand},${C.brandDk})`,color:'#fff',fontSize:15,fontWeight:700,fontFamily:C.ff,cursor:'pointer',boxShadow:`0 6px 24px ${C.brandGlow}`,letterSpacing:'0.01em',marginTop:4}}>
+            Entrar →
+          </button>
+        </Card>
+        <p style={{textAlign:'center',marginTop:18,fontFamily:C.fb,fontSize:12,color:C.inkLight,fontStyle:'italic'}}>{fmtD(now)}</p>
+      </div>
+    </div>
+  )
 
-          {/* FUNCIONÁRIO */}
-          {loggedIn?.role==='employee' && empState && (
-            <>
-              <div style={{ display:'flex', gap:6, marginBottom:16 }}>
-                {[['clock','🕐 Ponto'],['payment','💰 Pagamento'],['history','📋 Histórico']].map(([k,l])=>(
-                  <button key={k} onClick={()=>setView(k)} style={{ flex:1, padding:'7px 0', borderRadius:8, border:'none', cursor:'pointer', fontSize:10, fontWeight:700, fontFamily:'inherit', background:view===k?'#6366f1':'#1e293b', color:view===k?'#fff':'#64748b' }}>{l}</button>
-                ))}
+  // ─── EMPLOYEE ──────────────────────────────────────────────────────────────
+  if(user.role==='employee'&&est){
+    const tabs=[{key:'clock',icon:'⏱',label:'Ponto'},{key:'payment',icon:'💰',label:'Pagamento'},{key:'history',icon:'📋',label:'Histórico'}]
+
+    const punchBtns=[
+      {type:'entrada',label:'Entrada',icon:'▶',color:C.emerald,bg:C.emeraldLt,dis:est.status!==STATUS.OUT},
+      {type:'inicio_pausa',label:'Pausa',icon:'⏸',color:C.amber,bg:C.amberLt,dis:est.status!==STATUS.IN},
+      {type:'fim_pausa',label:'Retornar',icon:'↩',color:C.sky,bg:C.skyLt,dis:est.status!==STATUS.BREAK},
+      {type:'saida',label:'Saída',icon:'■',color:C.rose,bg:C.roseLt,dis:est.status===STATUS.OUT},
+    ]
+
+    return (
+      <div style={{minHeight:'100vh',background:C.bg,display:'flex',justifyContent:'center',fontFamily:C.fb}}>
+        <div style={{width:'100%',maxWidth:420,minHeight:'100vh',display:'flex',flexDirection:'column'}}>
+          {/* Header */}
+          <div style={{background:C.surface,padding:'18px 20px 14px',borderBottom:`1px solid ${C.border}`}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div style={{display:'flex',alignItems:'center',gap:12}}>
+                <div style={{width:42,height:42,borderRadius:14,background:`linear-gradient(135deg,${C.brand}20,${C.brandLt})`,border:`1.5px solid ${C.brand}30`,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:C.ff,fontSize:14,fontWeight:800,color:C.brand,flexShrink:0}}>{user.avatar}</div>
+                <div>
+                  <div style={{fontFamily:C.ff,fontSize:16,fontWeight:700,color:C.ink,lineHeight:1.1}}>{user.name}</div>
+                  <Dot status={est.status}/>
+                </div>
               </div>
+              <div style={{textAlign:'right'}}>
+                <div style={{fontFamily:C.ff,fontSize:20,fontWeight:700,color:C.brand,letterSpacing:'-0.02em'}}>{fmtT(now)}</div>
+                <div style={{fontFamily:C.fb,fontSize:10,color:C.inkLight,marginTop:1}}>{new Date().toLocaleDateString('pt-BR',{weekday:'short',day:'2-digit',month:'short'})}</div>
+              </div>
+            </div>
+          </div>
 
-              {view==='clock' && (
-                <>
-                  <div style={{ background:'linear-gradient(135deg,#1e293b,#0f172a)', borderRadius:16, padding:18, marginBottom:14, border:`1px solid ${statusColor[empState.status]}40` }}>
-                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14 }}>
-                      <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-                        <div style={{ width:44, height:44, borderRadius:'50%', background:'#6366f1', display:'flex', alignItems:'center', justifyContent:'center', fontSize:14, fontWeight:800, color:'#fff' }}>{loggedIn.avatar}</div>
-                        <div>
-                          <div style={{ fontSize:15, fontWeight:800, color:'#f1f5f9' }}>{loggedIn.name}</div>
-                          <div style={{ fontSize:11, color:'#64748b' }}>{loggedIn.role}</div>
-                        </div>
-                      </div>
-                      <div style={{ padding:'5px 12px', borderRadius:20, background:`${statusColor[empState.status]}20`, border:`1px solid ${statusColor[empState.status]}60`, fontSize:11, fontWeight:700, color:statusColor[empState.status] }}>
-                        {statusLabel[empState.status]}
-                      </div>
-                    </div>
-                    <div style={{ display:'flex', gap:8 }}>
-                      {[
-                        {label:'Hoje',val:msToHHMM(todayLiveWork),sub:formatDuration(todayLiveWork),color:'#22c55e'},
-                        {label:'Pausas',val:formatDuration(liveBreak),sub:formatHours(liveBreak),color:'#f59e0b'},
-                        {label:'A receber',val:empPayment?fmt(empPayment.net):fmt(0),sub:loggedIn.payType==='hour'?'por hora':'por dia',color:'#6366f1'},
-                      ].map(({label,val,sub,color})=>(
-                        <div key={label} style={{ flex:1, background:'#0f172a', borderRadius:10, padding:'10px 8px' }}>
-                          <div style={{ fontSize:9, color:'#475569', textTransform:'uppercase' }}>{label}</div>
-                          <div style={{ fontSize:13, fontWeight:800, color, marginTop:3 }}>{val}</div>
-                          <div style={{ fontSize:9, color:'#475569', marginTop:1 }}>{sub}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                  {geofence && (
-                    <div style={{ background:'#06b6d415', border:'1px solid #06b6d430', borderRadius:10, padding:'8px 14px', marginBottom:10, display:'flex', alignItems:'center', gap:8 }}>
-                      <span>📍</span>
-                      <div>
-                        <div style={{ fontSize:11, fontWeight:700, color:'#06b6d4' }}>Ponto com restrição de local</div>
-                        <div style={{ fontSize:10, color:'#475569' }}>Raio: {geofence.radius}m · {geofence.address}</div>
-                      </div>
+          <div style={{flex:1,overflowY:'auto',padding:'16px 16px 8px'}}>
+            {view==='clock'&&(
+              <>
+                {/* Stats row */}
+                <div style={{display:'flex',gap:8,marginBottom:14}}>
+                  <Stat label="Hoje" val={fmtHM(tdWork)} sub={fmtDur(tdWork)} color={C.emerald}/>
+                  <Stat label="Pausas" val={fmtHM(lb)} sub={fmtDur(lb)} color={C.amber}/>
+                  <Stat label="A receber" val={myPay?fmt(myPay.net):fmt(0)} sub="líquido" color={C.brand}/>
+                </div>
+
+                {/* Punch area */}
+                <Card style={{marginBottom:14,padding:18}}>
+                  {geo&&(
+                    <div style={{background:C.skyLt,border:`1px solid ${C.sky}30`,borderRadius:10,padding:'9px 12px',display:'flex',alignItems:'center',gap:8,marginBottom:14}}>
+                      <span style={{fontSize:14}}>📍</span>
+                      <span style={{fontFamily:C.fb,fontSize:12,color:C.sky,fontWeight:500}}>Ponto restrito — raio de {geo.radius}m</span>
                     </div>
                   )}
-                  {punchChecking && <div style={{ background:'#6366f115', border:'1px solid #6366f140', borderRadius:10, padding:'10px 14px', marginBottom:10, fontSize:12, color:'#a5b4fc', fontWeight:600, textAlign:'center' }}>🔍 Verificando localização...</div>}
-                  {punchBlocked && <div style={{ background:'#ef444415', border:'1px solid #ef444440', borderRadius:10, padding:'10px 14px', marginBottom:10, fontSize:12, color:'#ef4444', fontWeight:600 }}>{punchBlocked}</div>}
-                  <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:14 }}>
-                    {[
-                      {type:'entrada',label:'Entrada',icon:'▶',color:'#22c55e',disabled:empState.status!==STATUS.OUT},
-                      {type:'inicio_pausa',label:'Pausar',icon:'⏸',color:'#f59e0b',disabled:empState.status!==STATUS.IN},
-                      {type:'fim_pausa',label:'Retornar',icon:'↩',color:'#3b82f6',disabled:empState.status!==STATUS.BREAK},
-                      {type:'saida',label:'Saída',icon:'■',color:'#ef4444',disabled:empState.status===STATUS.OUT},
-                    ].map(({type,label,icon,color,disabled})=>(
-                      <button key={type} onClick={()=>!disabled&&punch(type)} style={{ padding:'16px 0', borderRadius:12, border:`1px solid ${disabled?'#334155':color+'60'}`, cursor:disabled?'not-allowed':'pointer', background:disabled?'#1e293b':`${color}20`, color:disabled?'#334155':color, fontSize:13, fontWeight:800, fontFamily:'inherit', display:'flex', flexDirection:'column', alignItems:'center', gap:6 }}>
-                        <span style={{ fontSize:20 }}>{icon}</span>{label}
+                  {checking&&<div style={{background:C.brandLt,border:`1px solid ${C.brand}30`,borderRadius:10,padding:'10px 14px',marginBottom:14,fontFamily:C.fb,fontSize:12,color:C.brand,textAlign:'center',animation:'pulse 1s infinite'}}>🔍 Verificando localização…</div>}
+                  {blocked&&<div style={{background:C.roseLt,border:`1px solid ${C.rose}30`,borderRadius:10,padding:'10px 14px',marginBottom:14,fontFamily:C.fb,fontSize:12,color:C.rose,fontWeight:500}}>{blocked}</div>}
+
+                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+                    {punchBtns.map(({type,label,icon,color,bg,dis})=>(
+                      <button key={type} onClick={()=>!dis&&punch(type)} style={{padding:'20px 10px',borderRadius:14,border:`1.5px solid ${dis?C.border:color+'30'}`,cursor:dis?'not-allowed':'pointer',background:dis?C.bg:bg,color:dis?C.inkXLight:color,display:'flex',flexDirection:'column',alignItems:'center',gap:8,transition:'transform .1s,box-shadow .2s',boxShadow:dis?'none':`0 4px 16px ${color}20`}}>
+                        <span style={{fontSize:22,lineHeight:1,filter:dis?'grayscale(1) opacity(0.3)':'none'}}>{icon}</span>
+                        <span style={{fontFamily:C.ff,fontSize:14,fontWeight:700,letterSpacing:'-0.01em'}}>{label}</span>
                       </button>
                     ))}
                   </div>
-                  {empState.dailyWork&&Object.keys(empState.dailyWork).length>0 && (
-                    <div style={{ background:'#1e293b', borderRadius:12, padding:14, marginBottom:14, border:'1px solid #334155' }}>
-                      <div style={{ fontSize:10, letterSpacing:3, color:'#475569', textTransform:'uppercase', marginBottom:10 }}>📅 Horas por Dia</div>
-                      {Object.entries(empState.dailyWork).sort(([a],[b])=>b.localeCompare(a)).slice(0,7).map(([date,ms])=>{
-                        const [y,mo,d]=date.split('-')
+                </Card>
+
+                {/* Recent */}
+                {Object.keys(est.dailyWork||{}).length>0&&(
+                  <Card pad={16}>
+                    <div style={{fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.inkLight,letterSpacing:'0.08em',textTransform:'uppercase',marginBottom:12}}>Últimos dias</div>
+                    {Object.entries(est.dailyWork).sort(([a],[b])=>b.localeCompare(a)).slice(0,5).map(([date,ms])=>{
+                      const[,mo,d]=date.split('-');const dow=new Date(date+'T12:00:00').toLocaleDateString('pt-BR',{weekday:'short'})
+                      return (
+                        <div key={date} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0',borderBottom:`1px solid ${C.border}`}}>
+                          <div style={{display:'flex',alignItems:'center',gap:8}}>
+                            <span style={{fontFamily:C.fb,fontSize:11,color:C.inkLight,width:28,textTransform:'capitalize'}}>{dow}</span>
+                            <span style={{fontFamily:C.fb,fontSize:13,color:C.inkMid}}>{d}/{mo}</span>
+                          </div>
+                          <span style={{fontFamily:C.ff,fontSize:15,fontWeight:700,color:C.emerald}}>{fmtHM(ms as number)}</span>
+                        </div>
+                      )
+                    })}
+                  </Card>
+                )}
+              </>
+            )}
+
+            {view==='payment'&&myPay&&myEmp&&(
+              <>
+                <Card style={{marginBottom:12,textAlign:'center',background:`linear-gradient(135deg,${C.brand},${C.brandDk})`,border:'none',boxShadow:`0 8px 32px ${C.brandGlow}`}}>
+                  <div style={{fontFamily:C.fb,fontSize:11,color:'rgba(255,255,255,.7)',letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:8,fontWeight:600}}>Valor líquido</div>
+                  <div style={{fontFamily:C.ff,fontSize:42,fontWeight:900,color:'#fff',letterSpacing:'-0.03em'}}>{fmt(myPay.net)}</div>
+                </Card>
+                {[
+                  {label:'⏱ Horas trabalhadas',val:fmtH(myPay.totalMs),sub:fmtDur(myPay.totalMs),c:C.emerald},
+                  {label:'☕ Em pausas',val:fmtH(myPay.breakMs),sub:fmtDur(myPay.breakMs),c:C.amber},
+                  {label:'📅 Dias trabalhados',val:myPay.daysWorked+' dia(s)',sub:'',c:C.sky},
+                  {label:'💵 Bruto',val:fmt(myPay.grossValue),sub:'',c:C.brand},
+                  ...(myPay.nightMs>0?[{label:'🌙 Noturno',val:fmt(myPay.nightBonus),sub:'+20%',c:'#7C3AED'}]:[]),
+                ].map(({label,val,sub,c})=>(
+                  <Card key={label} style={{padding:'14px 18px',marginBottom:8,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                    <div>
+                      <div style={{fontFamily:C.fb,fontSize:13,color:C.inkMid}}>{label}</div>
+                      {sub&&<div style={{fontFamily:C.fb,fontSize:11,color:C.inkLight,marginTop:2}}>{sub}</div>}
+                    </div>
+                    <div style={{fontFamily:C.ff,fontSize:15,fontWeight:700,color:c}}>{val}</div>
+                  </Card>
+                ))}
+              </>
+            )}
+
+            {view==='history'&&(
+              <div>
+                <div style={{fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.inkLight,letterSpacing:'0.08em',textTransform:'uppercase',marginBottom:14}}>Histórico de registros</div>
+                {est.log.length===0?(
+                  <div style={{textAlign:'center',padding:'60px 0',color:C.inkLight}}>
+                    <div style={{fontSize:40,marginBottom:12}}>📋</div>
+                    <div style={{fontFamily:C.ff,fontSize:15,color:C.inkMid}}>Nenhum registro ainda</div>
+                  </div>
+                ):(
+                  <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                    {[...est.log].reverse().map((entry,i)=>(
+                      <div key={i} style={{background:C.surface,borderRadius:12,border:`1px solid ${C.border}`,borderLeft:`4px solid ${tColor[entry.type]}`,padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                        <div>
+                          <div style={{fontFamily:C.ff,fontSize:14,fontWeight:600,color:C.ink}}>{tLabel[entry.type]}</div>
+                          <div style={{fontFamily:C.fb,fontSize:11,color:C.inkLight,marginTop:2}}>{fmtDs(entry.time)}</div>
+                        </div>
+                        <div style={{fontFamily:C.ff,fontSize:16,fontWeight:700,color:tColor[entry.type]}}>{fmtT(entry.time)}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <NavBar tabs={tabs} active={view} onSelect={setView}/>
+        </div>
+      </div>
+    )
+  }
+
+  // ─── ADMIN ─────────────────────────────────────────────────────────────────
+  const aTabs=[{key:'list',icon:'👥',label:'Equipe'},{key:'reports',icon:'💰',label:'Pagamentos'},{key:'monthly',icon:'📅',label:'Calendário'},{key:'geofence',icon:'📍',label:'Local'},{key:'empresa',icon:'🏢',label:'Empresa'}]
+
+  return (
+    <div style={{minHeight:'100vh',background:C.bg,display:'flex',justifyContent:'center',fontFamily:C.fb}}>
+      <div style={{width:'100%',maxWidth:420,minHeight:'100vh',display:'flex',flexDirection:'column'}}>
+        {/* Admin header */}
+        <div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:'16px 20px 12px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div style={{display:'flex',alignItems:'center',gap:12}}>
+            {co?.logo?<img src={co.logo} alt="" style={{height:28,maxWidth:90,objectFit:'contain',borderRadius:6}}/>:<div style={{width:32,height:32,borderRadius:10,background:`linear-gradient(135deg,${C.brand},${C.brandDk})`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:16}}>⏱</div>}
+            <div>
+              <div style={{fontFamily:C.ff,fontSize:14,fontWeight:700,color:C.ink,lineHeight:1.2}}>{co?.name||meta?.name||'Empresa'}</div>
+              <Chip color={C.brand} bg={C.brandLt}>Admin</Chip>
+            </div>
+          </div>
+          <div style={{display:'flex',alignItems:'center',gap:8}}>
+            <div style={{fontFamily:C.ff,fontSize:16,fontWeight:700,color:C.brand,background:C.brandLt,borderRadius:10,padding:'5px 12px'}}>{fmtT(now)}</div>
+            <Btn sm variant="ghost" onClick={logout}>Sair</Btn>
+          </div>
+        </div>
+
+        <div style={{flex:1,overflowY:'auto',padding:'16px 16px 8px'}}>
+
+          {/* ── EQUIPE ── */}
+          {view==='list'&&(
+            <>
+              {ok&&<div className="fade-up" style={{background:C.emeraldLt,border:`1px solid ${C.emerald}40`,borderRadius:12,padding:'12px 16px',marginBottom:14,fontFamily:C.fb,fontSize:13,color:C.emerald,fontWeight:600}}>✓ {ok}</div>}
+
+              {av==='list'&&(
+                <>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+                    <div>
+                      <div style={{fontFamily:C.ff,fontSize:20,fontWeight:700,color:C.ink,letterSpacing:'-0.02em'}}>Equipe</div>
+                      <div style={{fontFamily:C.fb,fontSize:12,color:C.inkMid,marginTop:2}}>{employees.length} funcionário{employees.length!==1?'s':''}</div>
+                    </div>
+                    <Btn sm onClick={()=>{setForm({name:'',role:'',username:'',password:'',payType:'day',payValue:'',hoursPerDay:'8',overtimeRate:'50',cpf:'',admission:'',fgts:false});setFErr({});setEditEmp(null);setAv('new')}}>+ Novo</Btn>
+                  </div>
+
+                  {employees.length===0&&(
+                    <div style={{textAlign:'center',padding:'60px 0',color:C.inkLight}}>
+                      <div style={{fontSize:40,marginBottom:12}}>👤</div>
+                      <div style={{fontFamily:C.ff,fontSize:15,color:C.inkMid}}>Nenhum funcionário ainda</div>
+                      <div style={{fontFamily:C.fb,fontSize:13,color:C.inkLight,marginTop:4}}>Adicione o primeiro!</div>
+                    </div>
+                  )}
+
+                  <div style={{display:'flex',flexDirection:'column',gap:10}}>
+                    {employees.map(emp=>{
+                      const st=gs(emp.id),tw=(st.totalWork||0)+(st.workStart?now.getTime()-st.workStart.getTime():0),pay=calcPay(emp,st,tw)
+                      return (
+                        <Card key={emp.id} style={{padding:0,overflow:'hidden'}}>
+                          <div style={{height:3,background:st.status===STATUS.IN?`linear-gradient(90deg,${C.emerald},${C.emerald}60)`:st.status===STATUS.BREAK?`linear-gradient(90deg,${C.amber},${C.amber}60)`:`linear-gradient(90deg,${C.border},${C.border})`}}/>
+                          <div style={{padding:16}}>
+                            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+                              <div style={{display:'flex',alignItems:'center',gap:12}}>
+                                <div style={{width:42,height:42,borderRadius:13,background:`linear-gradient(135deg,${C.brand}15,${C.brandLt})`,border:`1.5px solid ${C.brand}20`,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:C.ff,fontSize:14,fontWeight:800,color:C.brand,flexShrink:0}}>{emp.avatar}</div>
+                                <div>
+                                  <div style={{fontFamily:C.ff,fontSize:14,fontWeight:700,color:C.ink,lineHeight:1.2}}>{emp.name}</div>
+                                  <div style={{display:'flex',alignItems:'center',gap:6,marginTop:2}}><Dot status={st.status}/></div>
+                                </div>
+                              </div>
+                              <div style={{display:'flex',gap:6}}>
+                                <button onClick={()=>startEdit(emp)} style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,width:32,height:32,cursor:'pointer',fontSize:13,display:'flex',alignItems:'center',justifyContent:'center'}}>✏️</button>
+                                <button onClick={()=>delEmp(emp.id)} style={{background:C.roseLt,border:`1px solid ${C.rose}30`,borderRadius:8,width:32,height:32,cursor:'pointer',fontSize:13,display:'flex',alignItems:'center',justifyContent:'center'}}>🗑</button>
+                              </div>
+                            </div>
+                            <div style={{display:'flex',gap:8}}>
+                              <Stat label="Horas" val={fmtH(tw)} color={C.emerald}/>
+                              <Stat label="Descontos" val={(emp.discounts||[]).length>0?'- '+fmt((emp.discounts||[]).reduce((s,d)=>s+d.value,0)):'—'} color={(emp.discounts||[]).length>0?C.rose:C.inkXLight}/>
+                              <Stat label="A receber" val={fmt(pay.net)} color={C.brand}/>
+                            </div>
+                          </div>
+                        </Card>
+                      )
+                    })}
+                  </div>
+                </>
+              )}
+
+              {(av==='new'||av==='edit')&&(
+                <Card>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+                    <div style={{fontFamily:C.ff,fontSize:18,fontWeight:700,color:C.ink}}>{av==='new'?'Novo funcionário':'Editar funcionário'}</div>
+                    <Btn sm variant="ghost" onClick={()=>{setAv('list');setFErr({})}}>← Voltar</Btn>
+                  </div>
+                  <Input label="Nome completo" value={form.name} onChange={v=>setForm((f:any)=>({...f,name:v}))} placeholder="Ex: João da Silva" error={fErr.name}/>
+                  <Input label="Cargo" value={form.role} onChange={v=>setForm((f:any)=>({...f,role:v}))} placeholder="Ex: Operador" error={fErr.role}/>
+                  <Input label="Usuário (login)" value={form.username} onChange={v=>setForm((f:any)=>({...f,username:v}))} placeholder="Ex: joao.silva" error={fErr.username}/>
+                  <Input label={av==='edit'?'Nova senha (em branco = manter)':'Senha'} type="password" value={form.password} onChange={v=>setForm((f:any)=>({...f,password:v}))} error={fErr.password}/>
+
+                  <div style={{marginBottom:16}}>
+                    <div style={{fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:'0.06em',textTransform:'uppercase',marginBottom:8}}>Tipo de pagamento</div>
+                    <div style={{display:'flex',background:C.bg,borderRadius:10,padding:3,gap:3}}>
+                      {[['day','📅 Por dia'],['hour','⏱ Por hora']].map(([k,l])=>(
+                        <button key={k} onClick={()=>setForm((f:any)=>({...f,payType:k}))} style={{flex:1,padding:'10px 0',borderRadius:8,border:'none',cursor:'pointer',fontFamily:C.fb,fontSize:13,fontWeight:600,background:form.payType===k?C.surface:C.bg,color:form.payType===k?C.brand:C.inkLight,boxShadow:form.payType===k?'0 1px 4px rgba(15,23,42,.08)':'none',transition:'all .2s'}}>{l}</button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <Input label={form.payType==='day'?'Valor por dia (R$)':'Valor por hora (R$)'} type="number" value={form.payValue} onChange={v=>setForm((f:any)=>({...f,payValue:v}))} placeholder={form.payType==='day'?'120.00':'15.00'} error={fErr.payValue}/>
+                  <Input label="Horas por dia" type="number" value={form.hoursPerDay} onChange={v=>setForm((f:any)=>({...f,hoursPerDay:v}))} placeholder="8"/>
+
+                  <div style={{marginBottom:16}}>
+                    <div style={{fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:'0.06em',textTransform:'uppercase',marginBottom:8}}>Hora extra padrão</div>
+                    <div style={{display:'flex',background:C.bg,borderRadius:10,padding:3,gap:3}}>
+                      {['50','70','100'].map(r=>(
+                        <button key={r} onClick={()=>setForm((f:any)=>({...f,overtimeRate:r}))} style={{flex:1,padding:'10px 0',borderRadius:8,border:'none',cursor:'pointer',fontFamily:C.fb,fontSize:13,fontWeight:700,background:form.overtimeRate===r?C.amber:C.bg,color:form.overtimeRate===r?'#fff':C.inkLight,transition:'all .2s'}}>+{r}%</button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div style={{borderTop:`1px solid ${C.border}`,paddingTop:16,marginBottom:16}}>
+                    <div style={{fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.inkLight,letterSpacing:'0.08em',textTransform:'uppercase',marginBottom:12}}>Dados para holerite</div>
+                    <Input label="CPF" value={form.cpf||''} onChange={v=>setForm((f:any)=>({...f,cpf:v}))} placeholder="000.000.000-00"/>
+                    <Input label="Data de admissão" type="date" value={form.admission||''} onChange={v=>setForm((f:any)=>({...f,admission:v}))}/>
+                    <div style={{display:'flex',alignItems:'center',gap:12,padding:'12px 14px',background:C.bg,borderRadius:10,marginBottom:14}}>
+                      <input type="checkbox" id="fgts" checked={form.fgts||false} onChange={e=>setForm((f:any)=>({...f,fgts:e.target.checked}))} style={{width:18,height:18,accentColor:C.brand,cursor:'pointer'}}/>
+                      <label htmlFor="fgts" style={{fontFamily:C.fb,fontSize:13,color:C.inkMid,cursor:'pointer'}}>Funcionário com FGTS (CLT)</label>
+                    </div>
+                  </div>
+                  <Btn full onClick={saveEmp}>{av==='new'?'Cadastrar funcionário':'Salvar alterações'}</Btn>
+                </Card>
+              )}
+            </>
+          )}
+
+          {/* ── PAGAMENTOS ── */}
+          {view==='reports'&&(
+            <div>
+              {/* Month picker */}
+              <Card style={{padding:'13px 18px',marginBottom:14,display:'flex',alignItems:'center',gap:12}}>
+                <span style={{fontSize:20}}>📅</span>
+                <div style={{flex:1}}>
+                  <div style={{fontFamily:C.fb,fontSize:10,fontWeight:700,color:C.inkLight,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:3}}>Competência</div>
+                  <input type="month" value={rMonth} onChange={e=>{setRMonth(e.target.value);setExpR(null)}}
+                    style={{background:'transparent',border:'none',color:C.ink,fontSize:16,fontWeight:700,fontFamily:C.ff,outline:'none',cursor:'pointer'}}/>
+                </div>
+                <button onClick={()=>{const d=new Date();setRMonth(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`);setExpR(null)}}
+                  style={{background:C.brandLt,border:`1px solid ${C.brand}30`,borderRadius:8,padding:'6px 12px',cursor:'pointer',fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.brand}}>
+                  Atual
+                </button>
+              </Card>
+
+              {/* Total */}
+              <Card style={{padding:22,marginBottom:14,textAlign:'center',background:`linear-gradient(135deg,${C.brand},${C.brandDk})`,border:'none',boxShadow:`0 8px 32px ${C.brandGlow}`}}>
+                <div style={{fontFamily:C.fb,fontSize:11,color:'rgba(255,255,255,.65)',letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:8,fontWeight:600}}>
+                  Total a pagar · {new Date(rMonth+'-02').toLocaleDateString('pt-BR',{month:'long',year:'numeric'})}
+                </div>
+                <div style={{fontFamily:C.ff,fontSize:38,fontWeight:900,color:'#fff',letterSpacing:'-0.03em'}}>
+                  {fmt(employees.reduce((sum,emp)=>{const st=gs(emp.id);const tw=(st.totalWork||0)+(st.workStart?now.getTime()-st.workStart.getTime():0);return sum+calcPay(emp,st,tw,rMonth).net},0))}
+                </div>
+                <div style={{fontFamily:C.fb,fontSize:12,color:'rgba(255,255,255,.5)',marginTop:4}}>{employees.length} funcionário(s)</div>
+              </Card>
+
+              {employees.map(emp=>{
+                const st=gs(emp.id),tw=(st.totalWork||0)+(st.workStart?now.getTime()-st.workStart.getTime():0),pay=calcPay(emp,st,tw,rMonth)
+                const isOpen=expR===emp.id,isAddD=dtgt===emp.id,isAddG=gtgt===emp.id&&addG
+                return (
+                  <Card key={emp.id} style={{marginBottom:10,padding:0,overflow:'hidden'}}>
+                    <div style={{padding:16}}>
+                      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                        <div style={{display:'flex',alignItems:'center',gap:11}}>
+                          <div style={{width:38,height:38,borderRadius:12,background:C.brandLt,border:`1.5px solid ${C.brand}20`,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:C.ff,fontSize:13,fontWeight:800,color:C.brand,flexShrink:0}}>{emp.avatar}</div>
+                          <div>
+                            <div style={{fontFamily:C.ff,fontSize:14,fontWeight:700,color:C.ink}}>{emp.name}</div>
+                            <div style={{fontFamily:C.fb,fontSize:11,color:C.inkLight}}>{emp.payType==='hour'?fmt(emp.payValue)+'/h':fmt(emp.payValue)+'/dia'}</div>
+                          </div>
+                        </div>
+                        <div style={{textAlign:'right'}}>
+                          <div style={{fontFamily:C.ff,fontSize:18,fontWeight:800,color:C.emerald}}>{fmt(pay.net)}</div>
+                          <button onClick={()=>setExpR(isOpen?null:emp.id)} style={{background:'none',border:'none',cursor:'pointer',fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.brand,padding:'2px 0'}}>
+                            {isOpen?'fechar ▲':'detalhes ▼'}
+                          </button>
+                        </div>
+                      </div>
+
+                      {isOpen&&(
+                        <div style={{marginTop:16,paddingTop:16,borderTop:`1px solid ${C.border}`}}>
+                          {/* Key stats */}
+                          <div style={{display:'flex',flexDirection:'column',gap:6,marginBottom:16}}>
+                            {[
+                              {label:'⏱ Horas',val:fmtH(pay.totalMs)+' ('+fmtDur(pay.totalMs)+')',c:C.emerald},
+                              {label:'📅 Dias',val:pay.daysWorked+' dia(s)',c:C.sky},
+                              {label:'💵 Bruto',val:fmt(pay.grossValue),c:C.brand},
+                              ...(pay.overtimeMs>0?[{label:'⚡ Hora extra',val:fmtH(pay.overtimeMs),c:C.amber}]:[]),
+                              ...(pay.nightMs>0?[{label:'🌙 Noturno',val:fmt(pay.nightBonus),c:'#7C3AED'}]:[]),
+                            ].map(({label,val,c})=>(
+                              <div key={label} style={{display:'flex',justifyContent:'space-between',padding:'9px 12px',background:C.bg,borderRadius:9}}>
+                                <span style={{fontFamily:C.fb,fontSize:12,color:C.inkMid}}>{label}</span>
+                                <span style={{fontFamily:C.ff,fontSize:13,fontWeight:700,color:c}}>{val}</span>
+                              </div>
+                            ))}
+                          </div>
+
+                          {/* Descontos */}
+                          <div style={{background:C.roseLt,borderRadius:12,padding:14,marginBottom:10,border:`1px solid ${C.rose}20`}}>
+                            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+                              <span style={{fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.rose,letterSpacing:'0.08em',textTransform:'uppercase'}}>Descontos</span>
+                              <button onClick={()=>{setDtgt(isAddD?null:emp.id);setDform({value:'',reason:''});setDerr('')}}
+                                style={{background:C.surface,border:`1px solid ${C.rose}30`,borderRadius:8,padding:'4px 10px',cursor:'pointer',fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.rose}}>
+                                {isAddD?'✕ Cancelar':'+ Desconto'}
+                              </button>
+                            </div>
+                            {isAddD&&(
+                              <div style={{background:C.surface,borderRadius:10,padding:14,marginBottom:10,border:`1px solid ${C.border}`}}>
+                                <Input label="Valor (R$)" type="number" value={dform.value} onChange={v=>setDform(f=>({...f,value:v}))} placeholder="50.00" error={derr}/>
+                                <div style={{marginBottom:12}}>
+                                  <div style={{fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:'0.06em',textTransform:'uppercase',marginBottom:7}}>Motivo</div>
+                                  <textarea value={dform.reason} onChange={e=>setDform(f=>({...f,reason:e.target.value}))} placeholder="Ex: Falta não justificada…" rows={2}
+                                    style={{width:'100%',background:C.bg,border:`1.5px solid ${C.border}`,borderRadius:10,padding:'10px 14px',color:C.ink,fontSize:13,fontFamily:C.fb,outline:'none',resize:'none'}}/>
+                                </div>
+                                <Btn full variant="danger" onClick={()=>addDisc(emp.id)}>Confirmar desconto</Btn>
+                              </div>
+                            )}
+                            {(emp.discounts||[]).length===0&&!isAddD&&<div style={{fontFamily:C.fb,fontSize:12,color:C.inkLight,textAlign:'center',padding:'4px 0'}}>Nenhum desconto</div>}
+                            {(emp.discounts||[]).map(d=>(
+                              <div key={d.id} style={{background:C.surface,borderRadius:9,padding:'9px 12px',marginBottom:6,borderLeft:`3px solid ${C.rose}`,display:'flex',justifyContent:'space-between',alignItems:'center',gap:8}}>
+                                <div style={{flex:1}}>
+                                  <div style={{fontFamily:C.fb,fontSize:12,fontWeight:600,color:C.rose}}>{d.reason}</div>
+                                  <div style={{fontFamily:C.fb,fontSize:10,color:C.inkLight,marginTop:1}}>{d.date}</div>
+                                </div>
+                                <div style={{display:'flex',alignItems:'center',gap:8}}>
+                                  <span style={{fontFamily:C.ff,fontSize:13,fontWeight:700,color:C.rose}}>-{fmt(d.value)}</span>
+                                  <button onClick={()=>remDisc(emp.id,d.id)} style={{background:C.roseLt,border:`1px solid ${C.rose}30`,borderRadius:6,padding:'3px 7px',cursor:'pointer',fontSize:11,color:C.rose}}>🗑</button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+
+                          {/* Gratificações */}
+                          <div style={{background:C.emeraldLt,borderRadius:12,padding:14,marginBottom:14,border:`1px solid ${C.emerald}20`}}>
+                            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+                              <span style={{fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.emerald,letterSpacing:'0.08em',textTransform:'uppercase'}}>Gratificações</span>
+                              <button onClick={()=>{setGtgt(isAddG?null:emp.id);setAddG(!isAddG);setGform({value:'',reason:''});setGerr('')}}
+                                style={{background:C.surface,border:`1px solid ${C.emerald}30`,borderRadius:8,padding:'4px 10px',cursor:'pointer',fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.emerald}}>
+                                {isAddG?'✕ Cancelar':'+ Gratificação'}
+                              </button>
+                            </div>
+                            {isAddG&&(
+                              <div style={{background:C.surface,borderRadius:10,padding:14,marginBottom:10,border:`1px solid ${C.border}`}}>
+                                <Input label="Valor (R$)" type="number" value={gform.value} onChange={v=>setGform(f=>({...f,value:v}))} placeholder="100.00" error={gerr}/>
+                                <div style={{marginBottom:12}}>
+                                  <div style={{fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:'0.06em',textTransform:'uppercase',marginBottom:7}}>Motivo</div>
+                                  <textarea value={gform.reason} onChange={e=>setGform(f=>({...f,reason:e.target.value}))} placeholder="Ex: Bom desempenho…" rows={2}
+                                    style={{width:'100%',background:C.bg,border:`1.5px solid ${C.border}`,borderRadius:10,padding:'10px 14px',color:C.ink,fontSize:13,fontFamily:C.fb,outline:'none',resize:'none'}}/>
+                                </div>
+                                <Btn full variant="success" onClick={()=>addGrat(emp.id)}>Confirmar gratificação</Btn>
+                              </div>
+                            )}
+                            {(emp.gratifications||[]).length===0&&!isAddG&&<div style={{fontFamily:C.fb,fontSize:12,color:C.inkLight,textAlign:'center',padding:'4px 0'}}>Nenhuma gratificação</div>}
+                            {(emp.gratifications||[]).map(g=>(
+                              <div key={g.id} style={{background:C.surface,borderRadius:9,padding:'9px 12px',marginBottom:6,borderLeft:`3px solid ${C.emerald}`,display:'flex',justifyContent:'space-between',alignItems:'center',gap:8}}>
+                                <div style={{flex:1}}>
+                                  <div style={{fontFamily:C.fb,fontSize:12,fontWeight:600,color:C.emerald}}>{g.reason}</div>
+                                  <div style={{fontFamily:C.fb,fontSize:10,color:C.inkLight,marginTop:1}}>{g.date}</div>
+                                </div>
+                                <div style={{display:'flex',alignItems:'center',gap:8}}>
+                                  <span style={{fontFamily:C.ff,fontSize:13,fontWeight:700,color:C.emerald}}>+{fmt(g.value)}</span>
+                                  <button onClick={()=>remGrat(emp.id,g.id)} style={{background:C.emeraldLt,border:`1px solid ${C.emerald}30`,borderRadius:6,padding:'3px 7px',cursor:'pointer',fontSize:11,color:C.emerald}}>🗑</button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+
+                          <button onClick={()=>genHolerite(emp,gs(emp.id),pay,rMonth)} style={{width:'100%',padding:'14px',borderRadius:12,border:'none',background:`linear-gradient(135deg,${C.brand},${C.brandDk})`,color:'#fff',fontSize:13,fontWeight:700,fontFamily:C.ff,cursor:'pointer',boxShadow:`0 6px 20px ${C.brandGlow}`,letterSpacing:'0.01em'}}>
+                            📄 Baixar Holerite · {new Date(rMonth+'-02').toLocaleDateString('pt-BR',{month:'short',year:'numeric'})}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </Card>
+                )
+              })}
+            </div>
+          )}
+
+          {/* ── CALENDÁRIO ── */}
+          {view==='monthly'&&(
+            <div>
+              <div style={{display:'flex',gap:10,marginBottom:16}}>
+                <input type="month" value={mapM} onChange={e=>setMapM(e.target.value)}
+                  style={{flex:1,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:'11px 14px',color:C.ink,fontSize:13,fontFamily:C.ff,fontWeight:700,outline:'none'}}/>
+                <select value={mapTgt??''} onChange={e=>setMapTgt(e.target.value?Number(e.target.value):null)}
+                  style={{flex:1,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:'11px 14px',color:C.ink,fontSize:13,fontFamily:C.fb,outline:'none'}}>
+                  <option value="">Todos</option>
+                  {employees.map(e=><option key={e.id} value={e.id}>{e.name}</option>)}
+                </select>
+              </div>
+
+              {(mapTgt?employees.filter(e=>e.id===mapTgt):employees).map(emp=>{
+                const st=gs(emp.id),[year,month]=mapM.split('-').map(Number),days=getDaysInMonth(year,month-1)
+                const mTotal=days.reduce((s,d)=>s+(st.dailyWork[d]||0),0)
+                return (
+                  <Card key={emp.id} style={{marginBottom:14,padding:0,overflow:'hidden'}}>
+                    <div style={{padding:'14px 16px 12px',borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                      <div style={{fontFamily:C.ff,fontSize:15,fontWeight:700,color:C.ink}}>{emp.name}</div>
+                      <div style={{fontFamily:C.ff,fontSize:15,fontWeight:700,color:C.emerald}}>{fmtHM(mTotal)}</div>
+                    </div>
+                    <div style={{padding:'8px 12px 12px'}}>
+                      {days.map(date=>{
+                        const ms=st.dailyWork[date]||0,off=st.dailyOff?.[date],isToday=date===TODAY(),[,mo,d]=date.split('-')
+                        const dow=new Date(date+'T12:00:00').toLocaleDateString('pt-BR',{weekday:'short'})
+                        const isEd=editDay?.empId===emp.id&&editDay?.date===date
                         return (
-                          <div key={date} style={{ display:'flex', justifyContent:'space-between', padding:'8px 10px', background:'#0f172a', borderRadius:8, marginBottom:4 }}>
-                            <span style={{ fontSize:12, color:'#cbd5e1' }}>{d}/{mo}/{y}</span>
-                            <span style={{ fontSize:12, fontWeight:700, color:'#22c55e' }}>{msToHHMM(ms as number)}</span>
+                          <div key={date}>
+                            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 10px',background:isToday?C.brandLt:'transparent',borderRadius:9,marginBottom:2,border:isToday?`1px solid ${C.brand}20`:'1px solid transparent'}}>
+                              <div style={{display:'flex',alignItems:'center',gap:8}}>
+                                <span style={{fontFamily:C.fb,fontSize:10,color:C.inkLight,width:26,textTransform:'capitalize'}}>{dow}</span>
+                                <span style={{fontFamily:C.fb,fontSize:13,color:C.inkMid,fontWeight:isToday?600:400}}>{d}/{mo}</span>
+                                {off&&<Chip color={off==='paid'?C.emerald:C.amber} bg={off==='paid'?C.emeraldLt:C.amberLt}>{off==='paid'?'Paga':'Folga'}</Chip>}
+                              </div>
+                              <div style={{display:'flex',alignItems:'center',gap:8}}>
+                                <span style={{fontFamily:C.ff,fontSize:13,fontWeight:700,color:ms>0?C.emerald:C.inkXLight}}>{ms>0?fmtHM(ms):off?'—':'0h00'}</span>
+                                <button onClick={()=>{setEditDay(isEd?null:{empId:emp.id,date});if(!isEd){const h=Math.floor(ms/3600000),m=Math.floor((ms%3600000)/60000);setEditH(String(h));setEditMin(String(m))}}}
+                                  style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:6,padding:'3px 8px',cursor:'pointer',fontSize:11,color:C.inkMid}}>
+                                  {isEd?'✕':'✏️'}
+                                </button>
+                                <select value={off||''} onChange={e=>markOff(emp.id,date,(e.target.value as 'paid'|'unpaid'|null)||null)}
+                                  style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:6,padding:'4px 6px',color:C.inkMid,fontSize:11,fontFamily:C.fb,cursor:'pointer'}}>
+                                  <option value="">—</option>
+                                  <option value="paid">Folga Paga</option>
+                                  <option value="unpaid">Folga</option>
+                                </select>
+                              </div>
+                            </div>
+                            {isEd&&(
+                              <div style={{background:C.brandLt,borderRadius:12,padding:14,marginBottom:8,border:`1px solid ${C.brand}30`}}>
+                                <div style={{fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.brand,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:12}}>Editar {d}/{mo}</div>
+                                <div style={{display:'flex',gap:10,marginBottom:12}}>
+                                  {[['Horas',editH,setEditH,'0','23'],['Min',editMin,setEditMin,'0','59']].map(([lbl,val,setter,min,max])=>(
+                                    <div key={lbl as string} style={{flex:1}}>
+                                      <div style={{fontFamily:C.fb,fontSize:10,color:C.inkMid,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:6,fontWeight:700}}>{lbl as string}</div>
+                                      <input type="number" min={min as string} max={max as string} value={val as string} onChange={e=>(setter as Function)(e.target.value)}
+                                        style={{width:'100%',background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:'11px 12px',color:C.ink,fontSize:18,fontFamily:C.ff,fontWeight:700,outline:'none',textAlign:'center'}}/>
+                                    </div>
+                                  ))}
+                                </div>
+                                <div style={{display:'flex',gap:8}}>
+                                  <Btn full onClick={()=>saveHours(emp.id,date,Number(editH)||0,Number(editMin)||0,st.dailyOvertimeRate?.[date]??emp.overtimeRate)}>Salvar</Btn>
+                                  <Btn full variant="ghost" onClick={()=>setEditDay(null)}>Cancelar</Btn>
+                                </div>
+                              </div>
+                            )}
                           </div>
                         )
                       })}
                     </div>
-                  )}
-                </>
-              )}
-
-              {view==='payment' && empPayment && myEmpData && (
-                <div>
-                  <div style={{ background:'linear-gradient(135deg,#1e293b,#0f172a)', borderRadius:16, padding:18, marginBottom:14, border:'1px solid #22c55e30', textAlign:'center' }}>
-                    <div style={{ fontSize:10, letterSpacing:3, color:'#475569', textTransform:'uppercase', marginBottom:8 }}>Meu Pagamento</div>
-                    <div style={{ fontSize:36, fontWeight:900, color:'#22c55e' }}>{fmt(empPayment.net)}</div>
-                    <div style={{ fontSize:12, color:'#64748b', marginTop:4 }}>Valor líquido a receber</div>
-                  </div>
-                  {[
-                    {label:'⏱ Horas Trabalhadas',val:formatHours(empPayment.totalMs),sub:formatDuration(empPayment.totalMs),color:'#22c55e'},
-                    {label:'☕ Em Pausas',val:formatHours(empPayment.breakMs),sub:formatDuration(empPayment.breakMs),color:'#f59e0b'},
-                    {label:'📅 Dias Trabalhados',val:empPayment.daysWorked+' dia(s)',sub:'',color:'#06b6d4'},
-                    {label:'💵 Valor Bruto',val:fmt(empPayment.grossValue),sub:'',color:'#6366f1'},
-                  ].map(({label,val,sub,color})=>(
-                    <div key={label} style={{ background:'#1e293b', borderRadius:12, padding:'12px 14px', border:'1px solid #334155', display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
-                      <div>
-                        <div style={{ fontSize:12, color:'#94a3b8', fontWeight:600 }}>{label}</div>
-                        {sub&&<div style={{ fontSize:10, color:'#475569', marginTop:2 }}>{sub}</div>}
-                      </div>
-                      <div style={{ fontSize:14, fontWeight:800, color }}>{val}</div>
-                    </div>
-                  ))}
-                  {empPayment.nightMs>0 && (
-                    <div style={{ background:'#1e293b', borderRadius:12, padding:'12px 14px', border:'1px solid #334155', display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
-                      <div style={{ fontSize:12, color:'#94a3b8', fontWeight:600 }}>🌙 Adicional Noturno (+20%)</div>
-                      <div style={{ fontSize:14, fontWeight:800, color:'#818cf8' }}>{fmt(empPayment.nightBonus)}</div>
-                    </div>
-                  )}
-                  {(myEmpData.gratifications||[]).length>0 && (
-                    <div style={{ background:'#1e293b', borderRadius:12, padding:'12px 14px', border:'1px solid #22c55e30', marginBottom:8 }}>
-                      <div style={{ fontSize:10, color:'#22c55e', textTransform:'uppercase', letterSpacing:2, marginBottom:8 }}>⭐ Gratificações</div>
-                      {myEmpData.gratifications.map(g=>(
-                        <div key={g.id} style={{ display:'flex', justifyContent:'space-between', marginBottom:4 }}>
-                          <span style={{ fontSize:12, color:'#86efac' }}>{g.reason}</span>
-                          <span style={{ fontSize:12, fontWeight:700, color:'#22c55e' }}>+ {fmt(g.value)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <div style={{ background:'#22c55e20', border:'1px solid #22c55e60', borderRadius:14, padding:16, textAlign:'center', marginTop:8 }}>
-                    <div style={{ fontSize:10, color:'#4ade80', textTransform:'uppercase', letterSpacing:2, marginBottom:6 }}>Total a Receber</div>
-                    <div style={{ fontSize:30, fontWeight:900, color:'#22c55e' }}>{fmt(empPayment.net)}</div>
-                  </div>
-                </div>
-              )}
-
-              {view==='history' && (
-                <div>
-                  <div style={{ fontSize:10, letterSpacing:3, color:'#475569', textTransform:'uppercase', marginBottom:12 }}>Meu Histórico</div>
-                  {empState.log.length===0 ? (
-                    <div style={{ textAlign:'center', padding:'50px 0', color:'#475569' }}>
-                      <div style={{ fontSize:36, marginBottom:10 }}>📋</div>
-                      <div style={{ fontSize:13 }}>Nenhum registro ainda</div>
-                    </div>
-                  ) : (
-                    <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-                      {[...empState.log].reverse().map((entry,i)=>(
-                        <div key={i} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'12px 14px', background:'#1e293b', borderRadius:10, borderLeft:`3px solid ${typeColor[entry.type]}` }}>
-                          <div>
-                            <div style={{ fontSize:13, fontWeight:700, color:'#f1f5f9' }}>{typeLabel[entry.type]}</div>
-                            <div style={{ fontSize:10, color:'#64748b', marginTop:2 }}>{formatDateShort(entry.time)}</div>
-                          </div>
-                          <div style={{ fontSize:14, fontWeight:700, color:typeColor[entry.type] }}>{formatTime(entry.time)}</div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </>
+                  </Card>
+                )
+              })}
+            </div>
           )}
 
-          {/* ADMIN */}
-          {loggedIn?.role==='admin' && (
-            <>
-              <div style={{ display:'flex', gap:4, marginBottom:16, flexWrap:'wrap' }}>
-                {[['list','👥 Equipe'],['reports','💰 Pagamentos'],['monthly','📅 Mapa'],['geofence','📍 Local'],['empresa','🏢 Empresa']].map(([k,l])=>(
-                  <button key={k} onClick={()=>{setView(k);if(k==='list')setAdminView('list')}} style={{ flex:1, minWidth:60, padding:'8px 4px', borderRadius:8, border:'none', cursor:'pointer', fontSize:9, fontWeight:700, fontFamily:'inherit', background:view===k?'#6366f1':'#1e293b', color:view===k?'#fff':'#64748b' }}>{l}</button>
-                ))}
-              </div>
-
-              {/* EQUIPE */}
-              {view==='list' && (
-                <>
-                  {successMsg && <div style={{ background:'#16a34a20', border:'1px solid #22c55e60', borderRadius:10, padding:'10px 14px', marginBottom:14, fontSize:12, color:'#22c55e', fontWeight:600 }}>✅ {successMsg}</div>}
-                  {adminView==='list' && (
-                    <>
-                      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14 }}>
-                        <div>
-                          <div style={{ fontSize:10, letterSpacing:3, color:'#475569', textTransform:'uppercase' }}>Funcionários</div>
-                          <div style={{ fontSize:12, color:'#64748b', marginTop:2 }}>{employees.length} cadastrado(s)</div>
-                        </div>
-                        <Btn small onClick={()=>{setForm({name:'',role:'',username:'',password:'',payType:'day',payValue:'',hoursPerDay:'8',overtimeRate:'50',cpf:'',admission:'',fgts:false});setFormErrors({});setEditingEmp(null);setAdminView('new')}}>+ Novo</Btn>
+          {/* ── GEOFENCE ── */}
+          {view==='geofence'&&(
+            <div>
+              <div style={{fontFamily:C.ff,fontSize:20,fontWeight:700,color:C.ink,letterSpacing:'-0.02em',marginBottom:14}}>Localização</div>
+              <Card style={{marginBottom:14,padding:0,overflow:'hidden',border:`1px solid ${geo?C.emerald+'40':C.border}`}}>
+                <div style={{height:3,background:geo?`linear-gradient(90deg,${C.emerald},${C.emerald}60)`:`linear-gradient(90deg,${C.border},${C.border})`}}/>
+                <div style={{padding:18,display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+                  <div>
+                    <Chip color={geo?C.emerald:C.inkLight} bg={geo?C.emeraldLt:C.bg}>{geo?'🟢 Cerca ativa':'🔴 Sem restrição'}</Chip>
+                    {geo?(
+                      <div style={{marginTop:10}}>
+                        <div style={{fontFamily:C.ff,fontSize:14,fontWeight:600,color:C.ink,marginBottom:6}}>{geo.address}</div>
+                        <Chip color={C.sky} bg={C.skyLt}>📍 Raio: {geo.radius}m</Chip>
                       </div>
-                      <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
-                        {employees.map(emp=>{
-                          const st=getState(emp.id)
-                          const tw=(st.totalWork||0)+(st.workStart?now.getTime()-st.workStart.getTime():0)
-                          const pay=calcPayment(emp,st,tw)
-                          return (
-                            <div key={emp.id} style={{ background:'#1e293b', borderRadius:14, padding:14, border:'1px solid #334155' }}>
-                              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
-                                <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-                                  <div style={{ width:40, height:40, borderRadius:'50%', background:'#6366f1', display:'flex', alignItems:'center', justifyContent:'center', fontSize:13, fontWeight:800, color:'#fff', position:'relative' }}>
-                                    {emp.avatar}
-                                    <div style={{ position:'absolute', bottom:0, right:0, width:9, height:9, borderRadius:'50%', background:statusColor[st.status], border:'1.5px solid #1e293b' }} />
-                                  </div>
-                                  <div>
-                                    <div style={{ fontSize:13, fontWeight:700, color:'#f1f5f9' }}>{emp.name}</div>
-                                    <div style={{ fontSize:10, color:'#64748b' }}>{emp.role} · {emp.payType==='hour'?fmt(emp.payValue)+'/h':fmt(emp.payValue)+'/dia'}</div>
-                                  </div>
-                                </div>
-                                <div style={{ display:'flex', gap:6 }}>
-                                  <Btn small outline color="#6366f1" onClick={()=>startEdit(emp)}>✏️</Btn>
-                                  <Btn small outline color="#ef4444" onClick={()=>deleteEmployee(emp.id)}>🗑</Btn>
-                                </div>
-                              </div>
-                              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:6 }}>
-                                {[
-                                  {label:'Horas',val:formatHours(tw),color:'#22c55e'},
-                                  {label:'Descontos',val:(emp.discounts||[]).length>0?'- '+fmt((emp.discounts||[]).reduce((s,d)=>s+d.value,0)):'Nenhum',color:(emp.discounts||[]).length>0?'#ef4444':'#475569'},
-                                  {label:'A receber',val:fmt(pay.net),color:'#6366f1'},
-                                ].map(({label,val,color})=>(
-                                  <div key={label} style={{ background:'#0f172a', borderRadius:8, padding:'7px 8px' }}>
-                                    <div style={{ fontSize:9, color:'#475569', textTransform:'uppercase' }}>{label}</div>
-                                    <div style={{ fontSize:11, fontWeight:700, color, marginTop:2 }}>{val}</div>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    </>
-                  )}
-
-                  {(adminView==='new'||adminView==='edit') && (
-                    <div style={{ background:'#1e293b', borderRadius:16, padding:18, border:'1px solid #334155' }}>
-                      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:18 }}>
-                        <div style={{ fontSize:15, fontWeight:800, color:'#f1f5f9' }}>{adminView==='new'?'➕ Novo Funcionário':'✏️ Editar'}</div>
-                        <Btn small outline color="#64748b" onClick={()=>{setAdminView('list');setFormErrors({})}}>← Voltar</Btn>
-                      </div>
-                      <Input label="Nome Completo" value={form.name} onChange={v=>setForm((f:any)=>({...f,name:v}))} placeholder="Ex: João da Silva" error={formErrors.name} />
-                      <Input label="Cargo" value={form.role} onChange={v=>setForm((f:any)=>({...f,role:v}))} placeholder="Ex: Operador" error={formErrors.role} />
-                      <Input label="Usuário (login)" value={form.username} onChange={v=>setForm((f:any)=>({...f,username:v}))} placeholder="Ex: joao.silva" error={formErrors.username} />
-                      <Input label={adminView==='edit'?'Nova Senha (em branco = manter)':'Senha'} type="password" value={form.password} onChange={v=>setForm((f:any)=>({...f,password:v}))} placeholder="Digite a senha" error={formErrors.password} />
-                      <div style={{ marginBottom:14 }}>
-                        <div style={{ fontSize:10, letterSpacing:3, color:'#475569', textTransform:'uppercase', marginBottom:8 }}>Tipo de Pagamento</div>
-                        <div style={{ display:'flex', background:'#0f172a', borderRadius:10, padding:4 }}>
-                          <button onClick={()=>setForm((f:any)=>({...f,payType:'day'}))} style={{ flex:1, padding:'9px 0', borderRadius:8, border:'none', cursor:'pointer', fontSize:12, fontWeight:700, fontFamily:'inherit', background:form.payType==='day'?'#6366f1':'transparent', color:form.payType==='day'?'#fff':'#64748b' }}>📅 Por Dia</button>
-                          <button onClick={()=>setForm((f:any)=>({...f,payType:'hour'}))} style={{ flex:1, padding:'9px 0', borderRadius:8, border:'none', cursor:'pointer', fontSize:12, fontWeight:700, fontFamily:'inherit', background:form.payType==='hour'?'#6366f1':'transparent', color:form.payType==='hour'?'#fff':'#64748b' }}>⏱ Por Hora</button>
-                        </div>
-                      </div>
-                      <Input label={form.payType==='day'?'Valor por Dia (R$)':'Valor por Hora (R$)'} type="number" value={form.payValue} onChange={v=>setForm((f:any)=>({...f,payValue:v}))} placeholder={form.payType==='day'?'Ex: 120.00':'Ex: 15.00'} error={formErrors.payValue} />
-                      <Input label="Horas por Dia (jornada)" type="number" value={form.hoursPerDay} onChange={v=>setForm((f:any)=>({...f,hoursPerDay:v}))} placeholder="Ex: 8" />
-                      <div style={{ marginBottom:14 }}>
-                        <div style={{ fontSize:10, letterSpacing:3, color:'#475569', textTransform:'uppercase', marginBottom:8 }}>⚡ % Hora Extra padrão</div>
-                        <div style={{ display:'flex', background:'#0f172a', borderRadius:10, padding:4, gap:2 }}>
-                          {(['50','70','100'] as const).map(rate=>(
-                            <button key={rate} onClick={()=>setForm((f:any)=>({...f,overtimeRate:rate}))} style={{ flex:1, padding:'9px 0', borderRadius:8, border:'none', cursor:'pointer', fontSize:12, fontWeight:700, fontFamily:'inherit', background:form.overtimeRate===rate?'#f59e0b':'transparent', color:form.overtimeRate===rate?'#000':'#64748b' }}>+{rate}%</button>
-                          ))}
-                        </div>
-                      </div>
-                      <div style={{ paddingTop:14, borderTop:'1px solid #1e293b', marginBottom:14 }}>
-                        <div style={{ fontSize:10, letterSpacing:3, color:'#475569', textTransform:'uppercase', marginBottom:10 }}>📋 Dados para Holerite</div>
-                        <Input label="CPF" value={form.cpf||''} onChange={v=>setForm((f:any)=>({...f,cpf:v}))} placeholder="000.000.000-00" />
-                        <Input label="Data de Admissão" type="date" value={form.admission||''} onChange={v=>setForm((f:any)=>({...f,admission:v}))} placeholder="" />
-                        <div style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 12px', background:'#0f172a', borderRadius:10, marginBottom:14 }}>
-                          <input type="checkbox" id="fgts" checked={form.fgts||false} onChange={e=>setForm((f:any)=>({...f,fgts:e.target.checked}))} style={{ width:18, height:18, accentColor:'#6366f1', cursor:'pointer' }} />
-                          <label htmlFor="fgts" style={{ fontSize:12, color:'#94a3b8', cursor:'pointer', fontWeight:600 }}>Funcionário com FGTS (CLT)</label>
-                        </div>
-                      </div>
-                      <Btn full onClick={saveEmployee} color="#6366f1">{adminView==='new'?'✅ Cadastrar':'💾 Salvar'}</Btn>
-                    </div>
-                  )}
-                </>
-              )}
-
-              {/* PAGAMENTOS */}
-              {view==='reports' && (
-                <div>
-                  <div style={{ fontSize:10, letterSpacing:3, color:'#475569', textTransform:'uppercase', marginBottom:14 }}>Relatório de Pagamentos</div>
-
-                  {/* Seletor de mês */}
-                  <div style={{ background:'#1e293b', borderRadius:12, padding:'12px 14px', marginBottom:14, border:'1px solid #334155', display:'flex', alignItems:'center', gap:10 }}>
-                    <span style={{ fontSize:13 }}>📅</span>
-                    <div style={{ flex:1 }}>
-                      <div style={{ fontSize:9, letterSpacing:2, color:'#475569', textTransform:'uppercase', marginBottom:4 }}>Competência</div>
-                      <input type="month" value={reportMonth} onChange={e=>{setReportMonth(e.target.value);setExpandedReport(null)}}
-                        style={{ background:'transparent', border:'none', color:'#f1f5f9', fontSize:14, fontWeight:800, fontFamily:"'Courier New',monospace", outline:'none', cursor:'pointer', width:'100%' }} />
-                    </div>
-                    <button onClick={()=>{const d=new Date();setReportMonth(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`);setExpandedReport(null)}}
-                      style={{ background:'#6366f120', border:'1px solid #6366f140', borderRadius:8, padding:'5px 10px', cursor:'pointer', fontSize:10, color:'#a5b4fc', fontFamily:'inherit', fontWeight:700, whiteSpace:'nowrap' }}>
-                      Mês atual
-                    </button>
-                  </div>
-
-                  <div style={{ background:'linear-gradient(135deg,#1e293b,#0f172a)', borderRadius:16, padding:16, marginBottom:14, border:'1px solid #22c55e30' }}>
-                    <div style={{ fontSize:10, color:'#475569', textTransform:'uppercase', letterSpacing:2, marginBottom:6 }}>💰 Total a Pagar · {new Date(reportMonth+'-02').toLocaleDateString('pt-BR',{month:'long',year:'numeric'})}</div>
-                    <div style={{ fontSize:30, fontWeight:900, color:'#22c55e' }}>
-                      {fmt(employees.reduce((sum,emp)=>{
-                        const st=getState(emp.id); const tw=(st.totalWork||0)+(st.workStart?now.getTime()-st.workStart.getTime():0)
-                        return sum+calcPayment(emp,st,tw,reportMonth).net
-                      },0))}
-                    </div>
-                    <div style={{ fontSize:11, color:'#16a34a', marginTop:4 }}>{employees.length} funcionário(s)</div>
-                  </div>
-                  {employees.map(emp=>{
-                    const st=getState(emp.id)
-                    const tw=(st.totalWork||0)+(st.workStart?now.getTime()-st.workStart.getTime():0)
-                    const pay=calcPayment(emp,st,tw,reportMonth)
-                    const isOpen=expandedReport===emp.id
-                    const isAddingDiscount=discountTarget===emp.id
-                    const isAddingGratifHere=gratifTarget===emp.id&&isAddingGratif
-                    return (
-                      <div key={emp.id} style={{ background:'#1e293b', borderRadius:14, padding:16, marginBottom:12, border:'1px solid #334155' }}>
-                        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:isOpen?14:0 }}>
-                          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-                            <div style={{ width:38, height:38, borderRadius:'50%', background:'#6366f1', display:'flex', alignItems:'center', justifyContent:'center', fontSize:12, fontWeight:800, color:'#fff' }}>{emp.avatar}</div>
-                            <div>
-                              <div style={{ fontSize:13, fontWeight:700, color:'#f1f5f9' }}>{emp.name}</div>
-                              <div style={{ fontSize:10, color:'#64748b' }}>{emp.payType==='hour'?fmt(emp.payValue)+'/h':fmt(emp.payValue)+'/dia'}</div>
-                            </div>
-                          </div>
-                          <div style={{ textAlign:'right' }}>
-                            <div style={{ fontSize:16, fontWeight:800, color:'#22c55e' }}>{fmt(pay.net)}</div>
-                            <button onClick={()=>setExpandedReport(isOpen?null:emp.id)} style={{ background:'none', border:'none', cursor:'pointer', fontSize:10, color:'#6366f1', fontFamily:'inherit', fontWeight:700, marginTop:2 }}>
-                              {isOpen?'fechar ▲':'detalhes ▼'}
-                            </button>
-                          </div>
-                        </div>
-                        {isOpen && (
-                          <div>
-                            <div style={{ display:'flex', flexDirection:'column', gap:6, marginBottom:14 }}>
-                              {[
-                                {label:'⏱ Horas',val:formatHours(pay.totalMs)+' ('+formatDuration(pay.totalMs)+')',color:'#22c55e'},
-                                {label:'📅 Dias',val:pay.daysWorked+' dia(s)',color:'#06b6d4'},
-                                {label:'💵 Bruto',val:fmt(pay.grossValue),color:'#6366f1'},
-                                ...(pay.overtimeMs>0?[{label:`⚡ Hora Extra`,val:formatHours(pay.overtimeMs),color:'#f59e0b'}]:[]),
-                                ...(pay.nightMs>0?[{label:'🌙 Adicional Noturno',val:fmt(pay.nightBonus),color:'#818cf8'}]:[]),
-                              ].map(({label,val,color})=>(
-                                <div key={label} style={{ display:'flex', justifyContent:'space-between', padding:'7px 10px', background:'#0f172a', borderRadius:8 }}>
-                                  <span style={{ fontSize:11, color:'#94a3b8' }}>{label}</span>
-                                  <span style={{ fontSize:12, fontWeight:700, color }}>{val}</span>
-                                </div>
-                              ))}
-                            </div>
-                            {/* Descontos */}
-                            <div style={{ background:'#0f172a', borderRadius:12, padding:12, marginBottom:12, border:'1px solid #ef444425' }}>
-                              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
-                                <div style={{ fontSize:10, letterSpacing:2, color:'#ef4444', textTransform:'uppercase' }}>⬇ Descontos</div>
-                                <button onClick={()=>{setDiscountTarget(isAddingDiscount?null:emp.id);setDiscountForm({value:'',reason:''});setDiscountError('')}}
-                                  style={{ background:'#ef444420', border:'1px solid #ef444440', borderRadius:8, padding:'4px 10px', cursor:'pointer', fontSize:11, fontWeight:700, color:'#ef4444', fontFamily:'inherit' }}>
-                                  {isAddingDiscount?'✕ Cancelar':'+ Desconto'}
-                                </button>
-                              </div>
-                              {isAddingDiscount && (
-                                <div style={{ background:'#1e293b', borderRadius:10, padding:12, marginBottom:10, border:'1px solid #334155' }}>
-                                  <div style={{ marginBottom:10 }}>
-                                    <div style={{ fontSize:10, letterSpacing:2, color:'#475569', textTransform:'uppercase', marginBottom:6 }}>Valor (R$)</div>
-                                    <input type="number" value={discountForm.value} onChange={e=>setDiscountForm(f=>({...f,value:e.target.value}))} placeholder="Ex: 50.00"
-                                      style={{ width:'100%', boxSizing:'border-box', background:'#0f172a', border:'1px solid #334155', borderRadius:8, padding:'10px 12px', color:'#f1f5f9', fontSize:13, fontFamily:'inherit', outline:'none' }} />
-                                  </div>
-                                  <div style={{ marginBottom:10 }}>
-                                    <div style={{ fontSize:10, letterSpacing:2, color:'#475569', textTransform:'uppercase', marginBottom:6 }}>Motivo</div>
-                                    <textarea value={discountForm.reason} onChange={e=>setDiscountForm(f=>({...f,reason:e.target.value}))} placeholder="Ex: Falta não justificada..."
-                                      rows={2} style={{ width:'100%', boxSizing:'border-box', background:'#0f172a', border:'1px solid #334155', borderRadius:8, padding:'10px 12px', color:'#f1f5f9', fontSize:12, fontFamily:'inherit', outline:'none', resize:'none' }} />
-                                  </div>
-                                  {discountError && <div style={{ fontSize:11, color:'#ef4444', marginBottom:8 }}>⚠️ {discountError}</div>}
-                                  <Btn full onClick={()=>addDiscount(emp.id)} color="#ef4444">✅ Confirmar</Btn>
-                                </div>
-                              )}
-                              {(emp.discounts||[]).length===0&&!isAddingDiscount&&<div style={{ fontSize:12, color:'#475569', textAlign:'center', padding:'8px 0' }}>Nenhum desconto ainda</div>}
-                              {(emp.discounts||[]).map(d=>(
-                                <div key={d.id} style={{ background:'#1e293b', borderRadius:8, padding:'10px 12px', marginBottom:6, borderLeft:'3px solid #ef4444' }}>
-                                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:8 }}>
-                                    <div style={{ flex:1 }}>
-                                      <div style={{ fontSize:12, fontWeight:700, color:'#fca5a5' }}>{d.reason}</div>
-                                      <div style={{ fontSize:10, color:'#64748b', marginTop:2 }}>Lançado em {d.date}</div>
-                                    </div>
-                                    <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                                      <div style={{ fontSize:13, fontWeight:800, color:'#ef4444' }}>- {fmt(d.value)}</div>
-                                      <button onClick={()=>removeDiscount(emp.id,d.id)} style={{ background:'#ef444420', border:'1px solid #ef444440', borderRadius:6, padding:'3px 8px', cursor:'pointer', fontSize:10, color:'#ef4444', fontFamily:'inherit' }}>🗑</button>
-                                    </div>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                            {/* Gratificações */}
-                            <div style={{ background:'#0f172a', borderRadius:12, padding:12, marginBottom:12, border:'1px solid #22c55e25' }}>
-                              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
-                                <div style={{ fontSize:10, letterSpacing:2, color:'#22c55e', textTransform:'uppercase' }}>⭐ Gratificações</div>
-                                <button onClick={()=>{setGratifTarget(isAddingGratifHere?null:emp.id);setIsAddingGratif(!isAddingGratifHere);setGratifForm({value:'',reason:''});setGratifError('')}}
-                                  style={{ background:'#22c55e20', border:'1px solid #22c55e40', borderRadius:8, padding:'4px 10px', cursor:'pointer', fontSize:11, fontWeight:700, color:'#22c55e', fontFamily:'inherit' }}>
-                                  {isAddingGratifHere?'✕ Cancelar':'+ Gratificação'}
-                                </button>
-                              </div>
-                              {isAddingGratifHere && (
-                                <div style={{ background:'#1e293b', borderRadius:10, padding:12, marginBottom:10, border:'1px solid #334155' }}>
-                                  <div style={{ marginBottom:10 }}>
-                                    <div style={{ fontSize:10, letterSpacing:2, color:'#475569', textTransform:'uppercase', marginBottom:6 }}>Valor (R$)</div>
-                                    <input type="number" value={gratifForm.value} onChange={e=>setGratifForm(f=>({...f,value:e.target.value}))} placeholder="Ex: 100.00"
-                                      style={{ width:'100%', boxSizing:'border-box', background:'#0f172a', border:'1px solid #334155', borderRadius:8, padding:'10px 12px', color:'#f1f5f9', fontSize:13, fontFamily:'inherit', outline:'none' }} />
-                                  </div>
-                                  <div style={{ marginBottom:10 }}>
-                                    <div style={{ fontSize:10, letterSpacing:2, color:'#475569', textTransform:'uppercase', marginBottom:6 }}>Motivo</div>
-                                    <textarea value={gratifForm.reason} onChange={e=>setGratifForm(f=>({...f,reason:e.target.value}))} placeholder="Ex: Bom desempenho..."
-                                      rows={2} style={{ width:'100%', boxSizing:'border-box', background:'#0f172a', border:'1px solid #334155', borderRadius:8, padding:'10px 12px', color:'#f1f5f9', fontSize:12, fontFamily:'inherit', outline:'none', resize:'none' }} />
-                                  </div>
-                                  {gratifError && <div style={{ fontSize:11, color:'#ef4444', marginBottom:8 }}>⚠️ {gratifError}</div>}
-                                  <Btn full onClick={()=>addGratification(emp.id)} color="#22c55e">✅ Confirmar</Btn>
-                                </div>
-                              )}
-                              {(emp.gratifications||[]).length===0&&!isAddingGratifHere&&<div style={{ fontSize:12, color:'#475569', textAlign:'center', padding:'8px 0' }}>Nenhuma gratificação</div>}
-                              {(emp.gratifications||[]).map(g=>(
-                                <div key={g.id} style={{ background:'#1e293b', borderRadius:8, padding:'10px 12px', marginBottom:6, borderLeft:'3px solid #22c55e' }}>
-                                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:8 }}>
-                                    <div style={{ flex:1 }}>
-                                      <div style={{ fontSize:12, fontWeight:700, color:'#86efac' }}>{g.reason}</div>
-                                      <div style={{ fontSize:10, color:'#64748b', marginTop:2 }}>Lançado em {g.date}</div>
-                                    </div>
-                                    <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                                      <div style={{ fontSize:13, fontWeight:800, color:'#22c55e' }}>+ {fmt(g.value)}</div>
-                                      <button onClick={()=>removeGratification(emp.id,g.id)} style={{ background:'#22c55e20', border:'1px solid #22c55e40', borderRadius:6, padding:'3px 8px', cursor:'pointer', fontSize:10, color:'#22c55e', fontFamily:'inherit' }}>🗑</button>
-                                    </div>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                            <div style={{ display:'flex', gap:8 }}>
-                              <Btn full color="#6366f1" onClick={()=>generateHolerite(emp,getState(emp.id),pay,reportMonth)}>📄 Holerite PDF · {new Date(reportMonth+'-02').toLocaleDateString('pt-BR',{month:'short',year:'numeric'})}</Btn>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-
-              {/* MAPA MENSAL */}
-              {view==='monthly' && (
-                <div>
-                  <div style={{ fontSize:10, letterSpacing:3, color:'#475569', textTransform:'uppercase', marginBottom:14 }}>📅 Mapa de Horas</div>
-                  <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:16 }}>
-                    <input type="month" value={mapMonth} onChange={e=>setMapMonth(e.target.value)}
-                      style={{ flex:1, background:'#1e293b', border:'1px solid #334155', borderRadius:10, padding:'10px 12px', color:'#f1f5f9', fontSize:13, fontFamily:'inherit', outline:'none' }} />
-                    <select value={mapTarget??''} onChange={e=>setMapTarget(e.target.value?Number(e.target.value):null)}
-                      style={{ flex:1, background:'#1e293b', border:'1px solid #334155', borderRadius:10, padding:'10px 12px', color:'#f1f5f9', fontSize:13, fontFamily:'inherit', outline:'none' }}>
-                      <option value="">Todos</option>
-                      {employees.map(e=><option key={e.id} value={e.id}>{e.name}</option>)}
-                    </select>
-                  </div>
-                  {(mapTarget?employees.filter(e=>e.id===mapTarget):employees).map(emp=>{
-                    const state=getState(emp.id)
-                    const [year,month]=mapMonth.split('-').map(Number)
-                    const days=getDaysInMonth(year,month-1)
-                    const monthTotal=days.reduce((s,d)=>s+(state.dailyWork[d]||0),0)
-                    return (
-                      <div key={emp.id} style={{ background:'#1e293b', borderRadius:14, padding:14, marginBottom:14, border:'1px solid #334155' }}>
-                        <div style={{ fontSize:13, fontWeight:800, color:'#f1f5f9', marginBottom:12 }}>{emp.name}</div>
-                        {days.map(date=>{
-                          const ms=state.dailyWork[date]||0
-                          const off=state.dailyOff?.[date]
-                          const isToday=date===TODAY()
-                          const [_y,mo,d]=date.split('-')
-                          const dow=new Date(date+'T12:00:00').toLocaleDateString('pt-BR',{weekday:'short'})
-                          const isEditing=editingDay?.empId===emp.id&&editingDay?.date===date
-                          return (
-                            <div key={date} style={{ display:'flex', flexDirection:'column', gap:0 }}>
-                              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'8px 10px', background:isToday?'#6366f115':'#0f172a', borderRadius:8, marginBottom:4, border:isToday?'1px solid #6366f140':'1px solid transparent' }}>
-                                <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                                  <span style={{ fontSize:11, color:'#64748b', width:24 }}>{dow}</span>
-                                  <span style={{ fontSize:12, color:'#94a3b8' }}>{d}/{mo}</span>
-                                  {off && <span style={{ fontSize:9, padding:'2px 6px', borderRadius:4, background:off==='paid'?'#22c55e20':'#f59e0b20', color:off==='paid'?'#22c55e':'#f59e0b', fontWeight:700 }}>{off==='paid'?'Folga Paga':'Folga'}</span>}
-                                </div>
-                                <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-                                  <span style={{ fontSize:12, fontWeight:700, color:ms>0?'#22c55e':'#334155' }}>{ms>0?msToHHMM(ms):off?'—':'0h00'}</span>
-                                  <button onClick={()=>{setEditingDay(isEditing?null:{empId:emp.id,date});if(!isEditing){const h=Math.floor(ms/3600000);const m=Math.floor((ms%3600000)/60000);setEditHours(String(h));setEditMinutes(String(m))}}}
-                                    style={{ background:'#334155', border:'none', borderRadius:6, padding:'3px 8px', cursor:'pointer', fontSize:10, color:'#94a3b8', fontFamily:'inherit' }}>
-                                    {isEditing?'✕':'✏️'}
-                                  </button>
-                                  <select value={off||''} onChange={e=>markDayOff(emp.id,date,(e.target.value as 'paid'|'unpaid'|null)||null)}
-                                    style={{ background:'#1e293b', border:'1px solid #334155', borderRadius:6, padding:'3px 6px', color:'#94a3b8', fontSize:10, fontFamily:'inherit', cursor:'pointer' }}>
-                                    <option value="">—</option>
-                                    <option value="paid">Folga Paga</option>
-                                    <option value="unpaid">Folga</option>
-                                  </select>
-                                </div>
-                              </div>
-                              {isEditing && (
-                                <div style={{ background:'#0f172a', borderRadius:10, padding:12, marginBottom:8, border:'1px solid #6366f140' }}>
-                                  <div style={{ fontSize:10, color:'#6366f1', textTransform:'uppercase', letterSpacing:2, marginBottom:10 }}>✏️ Editar {d}/{mo}</div>
-                                  <div style={{ display:'flex', gap:8, marginBottom:10 }}>
-                                    <div style={{ flex:1 }}>
-                                      <div style={{ fontSize:10, color:'#475569', textTransform:'uppercase', marginBottom:6 }}>Horas</div>
-                                      <input type="number" min="0" max="23" value={editHours} onChange={e=>setEditHours(e.target.value)}
-                                        style={{ width:'100%', boxSizing:'border-box', background:'#1e293b', border:'1px solid #334155', borderRadius:8, padding:'10px 12px', color:'#f1f5f9', fontSize:14, fontFamily:'inherit', outline:'none', textAlign:'center' }} />
-                                    </div>
-                                    <div style={{ flex:1 }}>
-                                      <div style={{ fontSize:10, color:'#475569', textTransform:'uppercase', marginBottom:6 }}>Minutos</div>
-                                      <input type="number" min="0" max="59" value={editMinutes} onChange={e=>setEditMinutes(e.target.value)}
-                                        style={{ width:'100%', boxSizing:'border-box', background:'#1e293b', border:'1px solid #334155', borderRadius:8, padding:'10px 12px', color:'#f1f5f9', fontSize:14, fontFamily:'inherit', outline:'none', textAlign:'center' }} />
-                                    </div>
-                                  </div>
-                                  <div style={{ marginBottom:10 }}>
-                                    <div style={{ fontSize:10, color:'#475569', textTransform:'uppercase', marginBottom:6 }}>⚡ % Hora Extra</div>
-                                    <div style={{ display:'flex', gap:4 }}>
-                                      {[50,70,100].map(r=>(
-                                        <button key={r} onClick={()=>{}} style={{ flex:1, padding:'7px 0', borderRadius:8, border:'none', cursor:'pointer', fontSize:11, fontWeight:700, fontFamily:'inherit', background:(state.dailyOvertimeRate?.[date]??emp.overtimeRate)===r?'#f59e0b':'#1e293b', color:(state.dailyOvertimeRate?.[date]??emp.overtimeRate)===r?'#000':'#64748b' }}>+{r}%</button>
-                                      ))}
-                                    </div>
-                                  </div>
-                                  <div style={{ display:'flex', gap:8 }}>
-                                    <Btn full color="#6366f1" onClick={()=>saveEditedHours(emp.id,date,Number(editHours)||0,Number(editMinutes)||0,state.dailyOvertimeRate?.[date]??emp.overtimeRate)}>💾 Salvar</Btn>
-                                    <Btn full outline color="#64748b" onClick={()=>setEditingDay(null)}>Cancelar</Btn>
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          )
-                        })}
-                        <div style={{ marginTop:12, paddingTop:12, borderTop:'1px solid #334155', display:'flex', justifyContent:'space-between' }}>
-                          <span style={{ fontSize:12, color:'#64748b' }}>Total do mês</span>
-                          <span style={{ fontSize:14, fontWeight:800, color:'#22c55e' }}>{msToHHMM(monthTotal)}</span>
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-
-              {/* GEOFENCE */}
-              {view==='geofence' && (
-                <div>
-                  <div style={{ fontSize:10, letterSpacing:3, color:'#475569', textTransform:'uppercase', marginBottom:14 }}>📍 Controle de Localização</div>
-                  <div style={{ background:geofence?'#22c55e15':'#1e293b', border:`1px solid ${geofence?'#22c55e40':'#334155'}`, borderRadius:14, padding:16, marginBottom:16 }}>
-                    <div style={{ fontSize:10, letterSpacing:2, color:geofence?'#4ade80':'#475569', textTransform:'uppercase', marginBottom:8 }}>
-                      {geofence?'🟢 Cerca Ativa':'🔴 Sem Restrição de Local'}
-                    </div>
-                    {geofence ? (
-                      <div>
-                        <div style={{ fontSize:13, fontWeight:700, color:'#f1f5f9', marginBottom:4 }}>{geofence.address}</div>
-                        <div style={{ fontSize:11, color:'#64748b' }}>Raio: <span style={{ color:'#06b6d4', fontWeight:700 }}>{geofence.radius}m</span></div>
-                        <button onClick={async()=>{await deleteDoc(cfgDoc('geofence'));setGeoForm({address:'',radius:'100'})}}
-                          style={{ marginTop:12, padding:'8px 14px', borderRadius:8, border:'1px solid #ef444440', background:'#ef444415', color:'#ef4444', fontSize:11, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>
-                          🗑 Remover Cerca
-                        </button>
-                      </div>
-                    ) : (
-                      <div style={{ fontSize:12, color:'#64748b' }}>Funcionários podem bater ponto de qualquer lugar.</div>
+                    ):(
+                      <div style={{fontFamily:C.fb,fontSize:13,color:C.inkMid,marginTop:8}}>Ponto permitido de qualquer local.</div>
                     )}
                   </div>
-                  <div style={{ background:'#1e293b', borderRadius:14, padding:16, border:'1px solid #334155' }}>
-                    <div style={{ fontSize:13, fontWeight:800, color:'#f1f5f9', marginBottom:14 }}>{geofence?'✏️ Alterar':'➕ Definir'} Localização</div>
-                    <div style={{ marginBottom:14 }}>
-                      <div style={{ fontSize:10, letterSpacing:2, color:'#475569', textTransform:'uppercase', marginBottom:6 }}>Endereço</div>
-                      <input value={geoForm.address} onChange={e=>setGeoForm(f=>({...f,address:e.target.value}))} placeholder="Ex: Av. Paulista, 1000, São Paulo, SP"
-                        style={{ width:'100%', boxSizing:'border-box', background:'#0f172a', border:'1px solid #334155', borderRadius:10, padding:'12px 14px', color:'#f1f5f9', fontSize:13, fontFamily:'inherit', outline:'none' }} />
-                    </div>
-                    <div style={{ marginBottom:14 }}>
-                      <div style={{ fontSize:10, letterSpacing:2, color:'#475569', textTransform:'uppercase', marginBottom:6 }}>Raio: <span style={{ color:'#06b6d4' }}>{geoForm.radius}m</span></div>
-                      <input type="range" min="10" max="1000" step="10" value={geoForm.radius} onChange={e=>setGeoForm(f=>({...f,radius:e.target.value}))} style={{ width:'100%', accentColor:'#6366f1' }} />
-                      <div style={{ display:'flex', justifyContent:'space-between', fontSize:10, color:'#334155', marginTop:4 }}>
-                        <span>10m</span><span>500m</span><span>1000m</span>
-                      </div>
-                    </div>
-                    {geoError && <div style={{ background:'#ef444415', border:'1px solid #ef444440', borderRadius:8, padding:'10px 12px', fontSize:12, color:'#ef4444', marginBottom:12 }}>⚠️ {geoError}</div>}
-                    {geoSuccess && <div style={{ background:'#22c55e15', border:'1px solid #22c55e40', borderRadius:8, padding:'10px 12px', fontSize:12, color:'#22c55e', marginBottom:12 }}>✅ {geoSuccess}</div>}
-                    <button onClick={saveGeofence} disabled={geoLoading}
-                      style={{ width:'100%', padding:'13px', borderRadius:12, border:'none', cursor:geoLoading?'wait':'pointer', background:geoLoading?'#334155':'linear-gradient(135deg,#6366f1,#4f46e5)', color:geoLoading?'#64748b':'#fff', fontSize:13, fontWeight:800, fontFamily:'inherit' }}>
-                      {geoLoading?'🔍 Buscando...':'📍 Salvar Localização'}
-                    </button>
-                  </div>
+                  {geo&&<Btn sm variant="danger" onClick={async()=>{await deleteDoc(cfg('geofence'));setGeoF({address:'',radius:'100'})}}>Remover</Btn>}
                 </div>
-              )}
+              </Card>
 
-              {/* EMPRESA */}
-              {view==='empresa' && (
-                <div>
-                  <div style={{ fontSize:10, letterSpacing:3, color:'#475569', textTransform:'uppercase', marginBottom:14 }}>🏢 Dados da Empresa</div>
-                  <div style={{ background:'#1e293b', borderRadius:14, padding:16, marginBottom:14, border:'1px solid #334155', textAlign:'center' }}>
-                    <div style={{ fontSize:10, letterSpacing:2, color:'#475569', textTransform:'uppercase', marginBottom:12 }}>Logo da Empresa</div>
-                    {companyForm.logo ? (
-                      <div style={{ marginBottom:10 }}>
-                        <img src={companyForm.logo} alt="Logo" style={{ maxHeight:80, maxWidth:'100%', borderRadius:8, objectFit:'contain' }} />
-                      </div>
-                    ) : (
-                      <div style={{ width:80, height:80, borderRadius:12, background:'#0f172a', border:'2px dashed #334155', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 12px', fontSize:28 }}>🏢</div>
-                    )}
-                    <label style={{ background:'#6366f120', border:'1px solid #6366f140', borderRadius:8, padding:'8px 16px', cursor:'pointer', fontSize:11, fontWeight:700, color:'#a5b4fc', display:'inline-block' }}>
-                      📷 {companyForm.logo?'Trocar Logo':'Enviar Logo'}
-                      <input type="file" accept="image/*" style={{ display:'none' }} onChange={e=>{
-                        const file=e.target.files?.[0]; if (!file) return
-                        const reader=new FileReader()
-                        reader.onload=ev=>setCompanyForm(f=>({...f,logo:ev.target?.result as string}))
-                        reader.readAsDataURL(file)
-                      }} />
-                    </label>
-                    {companyForm.logo && (
-                      <button onClick={()=>setCompanyForm(f=>({...f,logo:''}))}
-                        style={{ marginLeft:8, background:'#ef444420', border:'1px solid #ef444440', borderRadius:8, padding:'8px 12px', cursor:'pointer', fontSize:11, color:'#ef4444', fontFamily:'inherit' }}>
-                        🗑 Remover
-                      </button>
-                    )}
-                  </div>
-                  <Input label="Nome da Empresa" value={companyForm.name} onChange={v=>setCompanyForm(f=>({...f,name:v}))} placeholder="Ex: Empresa LTDA" />
-                  <Input label="CNPJ" value={companyForm.cnpj} onChange={v=>setCompanyForm(f=>({...f,cnpj:v}))} placeholder="00.000.000/0000-00" />
-                  <Input label="Endereço Completo" value={companyForm.address} onChange={v=>setCompanyForm(f=>({...f,address:v}))} placeholder="Rua, Nº, Bairro, Cidade - UF" />
-                  <Input label="Telefone" value={companyForm.phone} onChange={v=>setCompanyForm(f=>({...f,phone:v}))} placeholder="(00) 00000-0000" />
-                  <Input label="E-mail" value={companyForm.email} onChange={v=>setCompanyForm(f=>({...f,email:v}))} placeholder="contato@empresa.com.br" />
-                  {companySaved && <div style={{ background:'#22c55e15', border:'1px solid #22c55e40', borderRadius:10, padding:'10px 14px', marginBottom:12, fontSize:12, color:'#22c55e', fontWeight:600 }}>✅ Dados salvos com sucesso!</div>}
-                  {companySaveError && <div style={{ background:'#ef444415', border:'1px solid #ef444440', borderRadius:10, padding:'10px 14px', marginBottom:12, fontSize:12, color:'#ef4444', fontWeight:600 }}>⚠️ {companySaveError}</div>}
-                  <Btn full color="#6366f1" onClick={async()=>{
-                    setCompanySaveError('')
-                    try {
-                      // Verifica tamanho do logo (Firestore tem limite de 1MB por documento)
-                      const logoSize = companyForm.logo ? new Blob([companyForm.logo]).size : 0
-                      if (logoSize > 900000) {
-                        setCompanySaveError('Logo muito grande! Use uma imagem menor (máx ~700KB).')
-                        return
-                      }
-                      await setDoc(doc(db, `companies/${slug}/config`, 'company'), {
-                        name: companyForm.name,
-                        cnpj: companyForm.cnpj,
-                        address: companyForm.address,
-                        phone: companyForm.phone,
-                        email: companyForm.email,
-                        logo: companyForm.logo,
-                      })
-                      setCompanySaved(true)
-                      setTimeout(()=>setCompanySaved(false), 3000)
-                    } catch(err: any) {
-                      setCompanySaveError('Erro ao salvar: ' + (err?.message || 'tente novamente.'))
-                    }
-                  }}>💾 Salvar Dados da Empresa</Btn>
+              <Card>
+                <div style={{fontFamily:C.ff,fontSize:16,fontWeight:700,color:C.ink,marginBottom:18}}>{geo?'Alterar':'Definir'} ponto de referência</div>
+                <Input label="Endereço" value={geoF.address} onChange={v=>setGeoF(f=>({...f,address:v}))} placeholder="Av. Paulista, 1000, São Paulo, SP" error={geoErr}/>
+                <div style={{marginBottom:16}}>
+                  <div style={{fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:'0.06em',textTransform:'uppercase',marginBottom:8}}>Raio: <span style={{color:C.sky,fontFamily:C.ff}}>{geoF.radius}m</span></div>
+                  <input type="range" min="10" max="1000" step="10" value={geoF.radius} onChange={e=>setGeoF(f=>({...f,radius:e.target.value}))} style={{width:'100%',accentColor:C.brand,height:4,cursor:'pointer'}}/>
                 </div>
-              )}
-            </>
+                {geoOk&&<div style={{background:C.emeraldLt,border:`1px solid ${C.emerald}40`,borderRadius:10,padding:'10px 14px',marginBottom:12,fontFamily:C.fb,fontSize:12,color:C.emerald,fontWeight:500}}>✓ {geoOk}</div>}
+                <button onClick={saveGeo} disabled={geoLoad} style={{width:'100%',padding:'13px',borderRadius:12,border:'none',background:geoLoad?C.border:`linear-gradient(135deg,${C.brand},${C.brandDk})`,color:geoLoad?C.inkLight:'#fff',fontSize:13,fontWeight:700,fontFamily:C.ff,cursor:geoLoad?'wait':'pointer',boxShadow:geoLoad?'none':`0 4px 16px ${C.brandGlow}`}}>
+                  {geoLoad?'🔍 Localizando…':'📍 Salvar localização'}
+                </button>
+              </Card>
+            </div>
+          )}
+
+          {/* ── EMPRESA ── */}
+          {view==='empresa'&&(
+            <div>
+              <div style={{fontFamily:C.ff,fontSize:20,fontWeight:700,color:C.ink,letterSpacing:'-0.02em',marginBottom:14}}>Dados da Empresa</div>
+
+              <Card style={{marginBottom:14,textAlign:'center',padding:22}}>
+                <div style={{fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.inkLight,letterSpacing:'0.08em',textTransform:'uppercase',marginBottom:14}}>Logo</div>
+                {coForm.logo?(
+                  <img src={coForm.logo} alt="" style={{maxHeight:80,maxWidth:'100%',borderRadius:12,objectFit:'contain',marginBottom:12,display:'block',margin:'0 auto 12px'}}/>
+                ):(
+                  <div style={{width:72,height:72,borderRadius:18,background:C.brandLt,border:`2px dashed ${C.brand}30`,display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 14px',fontSize:30}}>🏢</div>
+                )}
+                <div style={{display:'flex',gap:8,justifyContent:'center'}}>
+                  <label style={{background:C.brandLt,border:`1px solid ${C.brand}30`,borderRadius:10,padding:'8px 16px',cursor:'pointer',fontFamily:C.fb,fontSize:12,fontWeight:700,color:C.brand,display:'inline-block'}}>
+                    {coForm.logo?'Trocar':'Enviar logo'}
+                    <input type="file" accept="image/*" style={{display:'none'}} onChange={e=>{const f=e.target.files?.[0];if(!f)return;const r=new FileReader();r.onload=ev=>setCoForm(f=>({...f,logo:ev.target?.result as string}));r.readAsDataURL(f)}}/>
+                  </label>
+                  {coForm.logo&&<button onClick={()=>setCoForm(f=>({...f,logo:''}))} style={{background:C.roseLt,border:`1px solid ${C.rose}30`,borderRadius:10,padding:'8px 12px',cursor:'pointer',fontSize:12,color:C.rose,fontFamily:C.fb,fontWeight:600}}>Remover</button>}
+                </div>
+              </Card>
+
+              <Input label="Nome da empresa" value={coForm.name} onChange={v=>setCoForm(f=>({...f,name:v}))} placeholder="Ex: Empresa LTDA"/>
+              <Input label="CNPJ" value={coForm.cnpj} onChange={v=>setCoForm(f=>({...f,cnpj:v}))} placeholder="00.000.000/0000-00"/>
+              <Input label="Endereço" value={coForm.address} onChange={v=>setCoForm(f=>({...f,address:v}))} placeholder="Rua, Nº, Bairro, Cidade – UF"/>
+              <Input label="Telefone" value={coForm.phone} onChange={v=>setCoForm(f=>({...f,phone:v}))} placeholder="(00) 00000-0000"/>
+              <Input label="E-mail" value={coForm.email} onChange={v=>setCoForm(f=>({...f,email:v}))} placeholder="contato@empresa.com"/>
+
+              {coSaved&&<div style={{background:C.emeraldLt,border:`1px solid ${C.emerald}40`,borderRadius:12,padding:'12px 16px',marginBottom:14,fontFamily:C.fb,fontSize:13,color:C.emerald,fontWeight:600}}>✓ Dados salvos com sucesso!</div>}
+              {coErr&&<div style={{background:C.roseLt,border:`1px solid ${C.rose}30`,borderRadius:12,padding:'12px 16px',marginBottom:14,fontFamily:C.fb,fontSize:13,color:C.rose}}>⚠ {coErr}</div>}
+
+              <button onClick={async()=>{
+                setCoErr('')
+                try{
+                  const size=coForm.logo?new Blob([coForm.logo]).size:0
+                  if(size>900000){setCoErr('Logo muito grande! Use uma imagem menor (máx ~700KB).');return}
+                  await setDoc(doc(db,`companies/${slug}/config`,'company'),{name:coForm.name,cnpj:coForm.cnpj,address:coForm.address,phone:coForm.phone,email:coForm.email,logo:coForm.logo})
+                  setCoSaved(true);setTimeout(()=>setCoSaved(false),3000)
+                }catch(err:any){setCoErr('Erro: '+(err?.message||'tente novamente.'))}
+              }} style={{width:'100%',padding:'14px',borderRadius:14,border:'none',background:`linear-gradient(135deg,${C.brand},${C.brandDk})`,color:'#fff',fontSize:14,fontWeight:700,fontFamily:C.ff,cursor:'pointer',boxShadow:`0 6px 24px ${C.brandGlow}`,letterSpacing:'0.01em'}}>
+                Salvar dados da empresa
+              </button>
+            </div>
           )}
         </div>
 
-        {/* Footer */}
-        <div style={{ padding:'12px 20px', borderTop:'1px solid #1e293b', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-          <div style={{ fontSize:9, color:'#334155', letterSpacing:2, textTransform:'uppercase' }}>
-            {loggedIn?`👤 ${loggedIn.name}`:formatDate(now).split(',')[0]}
-          </div>
-          {loggedIn && (
-            <button onClick={handleLogout} style={{ background:'none', border:'none', cursor:'pointer', fontSize:11, color:'#ef4444', fontFamily:'inherit', fontWeight:700 }}>Sair →</button>
-          )}
-        </div>
+        <NavBar tabs={aTabs} active={view} onSelect={k=>{setView(k);if(k==='list')setAv('list')}}/>
       </div>
     </div>
   )
