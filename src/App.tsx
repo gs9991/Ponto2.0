@@ -95,7 +95,7 @@ const ABSENCE_CONFIG: Record<AbsenceType,{label:string;emoji:string;color:string
   compensatory:{label:'Folga Compens.', emoji:'🔄',color:'#0891B2',colorLt:'#CFFAFE',paga:true, contaDSR:false,descontaDia:false,descricao:'Compensação por trabalho em feriado ou hora extra'},
   bank_in:     {label:'Banco de Horas',  emoji:'🏦',color:'#6366F1',colorLt:'#EEF2FF',paga:false,contaDSR:false,descontaDia:false,descricao:'Horas extras creditadas no banco de horas'},
 }
-interface User       { id:number;name:string;username:string;avatar:string;role:string;payType:'day'|'hour';payValue:number;hoursPerDay:number;discounts:Discount[];companySlug?:string }
+interface User       { id:number;name:string;username:string;avatar:string;role:string;payType:'month'|'day'|'hour';payValue:number;hoursPerDay:number;discounts:Discount[];companySlug?:string }
 
 // ─── Tabelas Fiscais 2025 ────────────────────────────────────────────────────
 // INSS empregado — tabela progressiva 2025
