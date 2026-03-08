@@ -442,6 +442,7 @@ function CompanyApp({ slug, onLogout }: { slug: string; onLogout: ()=>void }) {
   const [company, setCompany] = useState<Company|null>(null)
   const [companyForm, setCompanyForm] = useState({ name:'', cnpj:'', address:'', phone:'', email:'', logo:'' })
   const [companySaved, setCompanySaved] = useState(false)
+  const [companySaveError, setCompanySaveError] = useState('')
 
   // Coleções isoladas por empresa: companies/{slug}/employees, companies/{slug}/records, etc.
   const empCol = `companies/${slug}/employees`
@@ -485,14 +486,14 @@ function CompanyApp({ slug, onLogout }: { slug: string; onLogout: ()=>void }) {
   }, [slug])
 
   useEffect(() => {
-    const unsub = onSnapshot(cfgDoc('geofence'), snap => {
+    const unsub = onSnapshot(doc(db, `companies/${slug}/config`, 'geofence'), snap => {
       if (snap.exists()) setGeofence(snap.data() as {lat:number;lng:number;radius:number;address:string})
       else setGeofence(null)
     }); return ()=>unsub()
   }, [slug])
 
   useEffect(() => {
-    const unsub = onSnapshot(cfgDoc('company'), snap => {
+    const unsub = onSnapshot(doc(db, `companies/${slug}/config`, 'company'), snap => {
       if (snap.exists()) {
         const d = snap.data() as Company
         setCompany(d)
@@ -1496,10 +1497,30 @@ function CompanyApp({ slug, onLogout }: { slug: string; onLogout: ()=>void }) {
                   <Input label="Endereço Completo" value={companyForm.address} onChange={v=>setCompanyForm(f=>({...f,address:v}))} placeholder="Rua, Nº, Bairro, Cidade - UF" />
                   <Input label="Telefone" value={companyForm.phone} onChange={v=>setCompanyForm(f=>({...f,phone:v}))} placeholder="(00) 00000-0000" />
                   <Input label="E-mail" value={companyForm.email} onChange={v=>setCompanyForm(f=>({...f,email:v}))} placeholder="contato@empresa.com.br" />
-                  {companySaved && <div style={{ background:'#22c55e15', border:'1px solid #22c55e40', borderRadius:10, padding:'10px 14px', marginBottom:12, fontSize:12, color:'#22c55e', fontWeight:600 }}>✅ Dados salvos!</div>}
+                  {companySaved && <div style={{ background:'#22c55e15', border:'1px solid #22c55e40', borderRadius:10, padding:'10px 14px', marginBottom:12, fontSize:12, color:'#22c55e', fontWeight:600 }}>✅ Dados salvos com sucesso!</div>}
+                  {companySaveError && <div style={{ background:'#ef444415', border:'1px solid #ef444440', borderRadius:10, padding:'10px 14px', marginBottom:12, fontSize:12, color:'#ef4444', fontWeight:600 }}>⚠️ {companySaveError}</div>}
                   <Btn full color="#6366f1" onClick={async()=>{
-                    await setDoc(cfgDoc('company'), companyForm)
-                    setCompanySaved(true); setTimeout(()=>setCompanySaved(false),3000)
+                    setCompanySaveError('')
+                    try {
+                      // Verifica tamanho do logo (Firestore tem limite de 1MB por documento)
+                      const logoSize = companyForm.logo ? new Blob([companyForm.logo]).size : 0
+                      if (logoSize > 900000) {
+                        setCompanySaveError('Logo muito grande! Use uma imagem menor (máx ~700KB).')
+                        return
+                      }
+                      await setDoc(doc(db, `companies/${slug}/config`, 'company'), {
+                        name: companyForm.name,
+                        cnpj: companyForm.cnpj,
+                        address: companyForm.address,
+                        phone: companyForm.phone,
+                        email: companyForm.email,
+                        logo: companyForm.logo,
+                      })
+                      setCompanySaved(true)
+                      setTimeout(()=>setCompanySaved(false), 3000)
+                    } catch(err: any) {
+                      setCompanySaveError('Erro ao salvar: ' + (err?.message || 'tente novamente.'))
+                    }
                   }}>💾 Salvar Dados da Empresa</Btn>
                 </div>
               )}
