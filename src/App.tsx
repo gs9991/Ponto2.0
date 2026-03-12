@@ -286,7 +286,7 @@ function CompanySelectScreen({onSelect}:{onSelect:(slug:string)=>void}){
 
 // ─── SUPER ADMIN SCREEN ───────────────────────────────────────────────────────
 function SuperAdminScreen({onLogout}:{onLogout:()=>void}){
-  const {C}=useTheme()
+  const {dark,toggle,C}=useTheme()
   const [companies,setCompanies]=useState<CompanyMeta[]>([])
   const [view,setView]=useState<'list'|'new'>('list')
   const [form,setForm]=useState({slug:'',name:'',adminUsername:'',adminPassword:''})
@@ -320,7 +320,7 @@ function SuperAdminScreen({onLogout}:{onLogout:()=>void}){
   const copy=(slug:string)=>{navigator.clipboard.writeText(slug);setCopied(slug);setTimeout(()=>setCopied(null),2000)}
 
   return (
-    <div style={{minHeight:'100vh',background:C.bg,display:'flex',justifyContent:'center',fontFamily:C.fb}}>
+    <div style={{minHeight:'100vh',background:dark?`linear-gradient(160deg,#1a1f35 0%,${DARK_TOKENS.bg} 40%,#0a0d16 100%)`:`linear-gradient(160deg,${C.goldLt} 0%,#F7F8FC 40%,${C.bg} 100%)`,display:'flex',justifyContent:'center',fontFamily:C.fb,transition:'background .3s'}}>
       <div style={{width:'100%',maxWidth:420,display:'flex',flexDirection:'column'}}>
         {/* Header */}
         <div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:'18px 20px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
@@ -330,6 +330,7 @@ function SuperAdminScreen({onLogout}:{onLogout:()=>void}){
           </div>
           <div style={{display:'flex',alignItems:'center',gap:10}}>
             <div style={{fontFamily:C.ff,fontSize:16,fontWeight:700,color:C.brand,background:C.brandLt,borderRadius:10,padding:'6px 14px'}}>{fmtT(now)}</div>
+            <button onClick={toggle} style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:20,padding:'5px 10px',cursor:'pointer',display:'flex',alignItems:'center',gap:5,fontFamily:C.fb,fontSize:11,fontWeight:700,color:C.inkMid}}><span>{dark?'🌙':'☀️'}</span></button>
             <Btn sm variant="danger" onClick={onLogout}>Sair</Btn>
           </div>
         </div>
